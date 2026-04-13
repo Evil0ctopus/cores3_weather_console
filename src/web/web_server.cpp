@@ -120,7 +120,7 @@ void WebServerHost::publishSettings(bool force) {
 	}
 
 	JsonDocument doc;
-	const ui::ThemeId deviceTheme = themeProvider_ != nullptr ? themeProvider_(themeProviderContext_) : ui::ThemeId::Dark;
+	const ui::ThemeId deviceTheme = themeProvider_ != nullptr ? themeProvider_(themeProviderContext_) : ui::ThemeId::PIXEL_STORM;
 	writeWebSettingsJson(doc, settingsStore_->settings(), deviceTheme);
 	doc["revision"] = settingsStore_->revision();
 	const String payload = serializeJsonDocument(doc);

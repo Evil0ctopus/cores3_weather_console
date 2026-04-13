@@ -32,9 +32,7 @@ void writeWifiStatusJson(JsonDocument& doc,
 }
 
 String effectiveThemeString(const app::AppSettings& settings, ui::ThemeId deviceTheme) {
-	if (settings.theme == app::ThemePreference::MatchDevice) {
-		return themeIdToString(deviceTheme);
-	}
+	(void)deviceTheme;
 	return app::toString(settings.theme);
 }
 
@@ -72,15 +70,7 @@ String urlEncode(const String& value) {
 }
 
 String themeIdToString(ui::ThemeId themeId) {
-	switch (themeId) {
-		case ui::ThemeId::Light:
-			return "light";
-		case ui::ThemeId::Dark:
-			return "dark";
-		case ui::ThemeId::FutureCustom1:
-			return "future1";
-	}
-	return "dark";
+	return String(ui::theme_id_to_storage_key(themeId));
 }
 
 void sendError(AsyncWebServerRequest* request, const String& message, int statusCode) {
@@ -335,7 +325,7 @@ void registerRoutes(AsyncWebServer& server,
 
 	server.on("/api/settings", HTTP_GET, [&settingsStore, themeProvider, themeProviderContext](AsyncWebServerRequest* request) {
 		JsonDocument doc;
-		const ui::ThemeId deviceTheme = themeProvider != nullptr ? themeProvider(themeProviderContext) : ui::ThemeId::Dark;
+		const ui::ThemeId deviceTheme = themeProvider != nullptr ? themeProvider(themeProviderContext) : ui::ThemeId::PIXEL_STORM;
 		writeWebSettingsJson(doc, settingsStore.settings(), deviceTheme);
 		doc["revision"] = settingsStore.revision();
 		sendJson(request, doc);
@@ -456,7 +446,7 @@ void registerRoutes(AsyncWebServer& server,
 		}
 
 		JsonDocument doc;
-		const ui::ThemeId deviceTheme = themeProvider != nullptr ? themeProvider(themeProviderContext) : ui::ThemeId::Dark;
+		const ui::ThemeId deviceTheme = themeProvider != nullptr ? themeProvider(themeProviderContext) : ui::ThemeId::PIXEL_STORM;
 		writeWebSettingsJson(doc, settingsStore.settings(), deviceTheme);
 		doc["revision"] = settingsStore.revision();
 		doc["message"] = "Settings saved and applied.";

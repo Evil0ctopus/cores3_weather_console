@@ -25,8 +25,18 @@ bool SummaryContains(const String& summary, const char* token) {
 void LedEngine::begin(uint8_t brightness) {
 	brightness_ = brightness;
 	initialized_ = true;
-	ready_ = M5.Led.isEnabled() || M5.Led.begin();
-	ledCount_ = ready_ ? M5.Led.getCount() : 0;
+	lastInitAttemptMs_ = millis();
+	const bool beginOk = M5.Led.begin();
+	const bool enabled = M5.Led.isEnabled();
+	const size_t reportedCount = M5.Led.getCount();
+	ready_ = beginOk || enabled || (reportedCount > 0);
+	if (!ready_) {
+		ready_ = true;
+	}
+	ledCount_ = reportedCount;
+	if (ledCount_ == 0) {
+		ledCount_ = kMaxLeds;
+	}
 	if (ledCount_ > kMaxLeds) {
 		ledCount_ = kMaxLeds;
 	}
@@ -35,6 +45,10 @@ void LedEngine::begin(uint8_t brightness) {
 	if (ready_) {
 		M5.Led.setBrightness(brightness_);
 	}
+	emitEvent("led-init", "ready=" + String(ready_ ? "true" : "false") +
+		" begin=" + String(beginOk ? "true" : "false") +
+		" enabled=" + String(enabled ? "true" : "false") +
+		" count=" + String(static_cast<unsigned>(ledCount_)));
 
 	mood_.primary = patterns::color(24, 48, 96);
 	mood_.secondary = patterns::color(6, 14, 28);
@@ -87,7 +101,46 @@ void LedEngine::begin(uint8_t brightness) {
 }
 
 void LedEngine::update() {
-	if (!initialized_ || !ready_ || ledCount_ == 0) {
+	if (!initialized_) {
+		return;
+	}
+
+	if (!ready_ || ledCount_ == 0) {
+		const uint32_t nowMs = millis();
+		if ((nowMs - lastInitAttemptMs_) >= 1500U) {
+			lastInitAttemptMs_ = nowMs;
+			const bool beginOk = M5.Led.begin();
+			const bool enabled = M5.Led.isEnabled();
+			const size_t reportedCount = M5.Led.getCount();
+			ready_ = beginOk || enabled || (reportedCount > 0);
+			if (!ready_) {
+				ready_ = true;
+			}
+			ledCount_ = reportedCount;
+			if (ledCount_ == 0) {
+				ledCount_ = kMaxLeds;
+			}
+			if (ledCount_ > kMaxLeds) {
+				ledCount_ = kMaxLeds;
+			}
+			if (ready_ && ledCount_ > 0) {
+				M5.Led.setAutoDisplay(false);
+				M5.Led.setBrightness(brightness_);
+				clearFrame();
+				for (size_t i = 0; i < kMaxLeds; ++i) {
+					lastPushed_[i] = RGBColor();
+				}
+				pushToHardware();
+				emitEvent("led-ready", "reinitialized");
+			} else {
+				emitEvent("led-retry", "ready=false begin=" + String(beginOk ? "true" : "false") +
+					" enabled=" + String(enabled ? "true" : "false") +
+					" count=" + String(static_cast<unsigned>(reportedCount)));
+			}
+		}
+	}
+
+	if (!ready_ || ledCount_ == 0) {
 		return;
 	}
 

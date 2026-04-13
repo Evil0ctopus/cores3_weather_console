@@ -163,6 +163,7 @@ class LedEngine {
 	uint8_t brightness_ = 96;
 	size_t ledCount_ = 0;
 	uint32_t lastRenderMs_ = 0;
+	uint32_t lastInitAttemptMs_ = 0;
 
 	MoodPalette mood_;
 	TransitionState transition_;

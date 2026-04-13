@@ -5,8 +5,13 @@ namespace ui {
 void RadarPanel::begin(lv_obj_t* parent, ThemeManager& theme) {
 	card_ = lv_obj_create(parent);
 	lv_obj_set_size(card_, lv_pct(100), lv_pct(100));
-	lv_obj_add_style(card_, theme.cardStyle(), LV_PART_MAIN);
+	lv_obj_clear_flag(card_, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(card_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
+	lv_obj_set_style_border_width(card_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(card_, theme.spacing().cardPadding, LV_PART_MAIN);
+	
+	// Apply semi-transparent card overlay style
+	ui_style_card(card_, theme);
 
 	titleLabel_ = lv_label_create(card_);
 	lv_obj_set_style_text_color(titleLabel_, theme.palette().textPrimary, LV_PART_MAIN);
@@ -37,8 +42,12 @@ void RadarPanel::begin(lv_obj_t* parent, ThemeManager& theme) {
 }
 
 void RadarPanel::applyTheme(ThemeManager& theme) {
-	lv_obj_add_style(card_, theme.cardStyle(), LV_PART_MAIN);
+	lv_obj_set_style_border_width(card_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(card_, theme.spacing().cardPadding, LV_PART_MAIN);
+	
+	// Reapply semi-transparent card overlay for new theme
+	ui_style_card(card_, theme);
+	
 	lv_obj_set_style_text_color(titleLabel_, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(titleLabel_, &lv_font_montserrat_14, LV_PART_MAIN);
 	lv_obj_set_style_transform_zoom(titleLabel_, theme.typography().pageTitleZoom, LV_PART_MAIN);

@@ -81,24 +81,39 @@ function setWifiMessage(text, kind = '') {
 }
 
 function resolveTheme(themeSetting, deviceTheme) {
-  return themeSetting === 'device' ? deviceTheme : themeSetting;
+  return themeSetting || deviceTheme || 'pixel_storm';
 }
 
 function applyPageTheme(themeSetting, deviceTheme) {
   const resolved = resolveTheme(themeSetting, deviceTheme);
-  document.body.dataset.theme = resolved === 'light' ? 'light' : 'dark';
+  const lightThemes = new Set(['desert_calm', 'daybreak_clear']);
+  document.body.dataset.theme = lightThemes.has(resolved) ? 'light' : 'dark';
 }
 
 function themeLabel(theme) {
   switch (theme) {
-    case 'light':
-      return 'Light';
-    case 'dark':
-      return 'Dark';
-    case 'future1':
-      return 'Future Theme';
+    case 'pixel_storm':
+      return 'Pixel Storm';
+    case 'desert_calm':
+      return 'Desert Calm';
+    case 'future_pulse':
+      return 'Future Pulse';
+    case 'midnight_radar':
+      return 'Midnight Radar';
+    case 'daybreak_clear':
+      return 'Daybreak Clear';
+    case 'stormglass':
+      return 'Stormglass';
+    case 'aurora_line':
+      return 'Aurora Line';
+    case 'ocean_front':
+      return 'Ocean Front';
+    case 'mono_wireframe':
+      return 'Mono Wireframe';
+    case 'infrared_scan':
+      return 'Infrared Scan';
     default:
-      return 'Match Device';
+      return 'Pixel Storm';
   }
 }
 
@@ -130,7 +145,7 @@ function serializeForm() {
   params.set('locationQuery', draft.locationQuery || '');
   params.set('apiKey', draft.apiKey || '');
   params.set('units', draft.units || 'metric');
-  params.set('theme', draft.theme || 'device');
+  params.set('theme', draft.theme || 'pixel_storm');
   params.set('radarMode', draft.radarMode || 'base');
   params.set('radarAutoContrast', draft.radarAutoContrast ? 'true' : 'false');
   params.set('radarInterpolation', draft.radarInterpolation ? 'true' : 'false');
@@ -273,7 +288,7 @@ function populateForm(settings) {
   elements.locationQuery.value = settings.locationQuery || '';
   elements.apiKey.value = settings.apiKey || '';
   elements.units.value = settings.units || 'metric';
-  elements.theme.value = settings.theme || 'device';
+  elements.theme.value = settings.theme || 'pixel_storm';
   elements.radarMode.value = settings.radarMode || 'base';
   elements.radarAutoContrast.checked = settings.radarAutoContrast !== false;
   elements.radarInterpolation.checked = settings.radarInterpolation !== false;
@@ -284,8 +299,8 @@ function populateForm(settings) {
   elements.updateIntervalMinutes.value = settings.updateIntervalMinutes || 5;
   elements.resolvedLocation.textContent = settings.locationName || settings.locationQuery || 'Not configured';
   elements.locationKey.textContent = settings.locationKey || 'None';
-  elements.deviceThemePill.textContent = `Device Theme: ${settings.deviceTheme || 'dark'}`;
-  applyPageTheme(settings.theme, settings.deviceTheme || 'dark');
+  elements.deviceThemePill.textContent = `Device Theme: ${themeLabel(settings.deviceTheme || 'pixel_storm')}`;
+  applyPageTheme(settings.theme, settings.deviceTheme || 'pixel_storm');
   state.lastSerialized = serializeForm();
 }
 
@@ -495,8 +510,8 @@ function renderPreview(preview, draft = readDraftSettings()) {
   state.preview = preview;
 
   const savedSettings = state.settings || {};
-  const deviceTheme = savedSettings.deviceTheme || 'dark';
-  const effectiveTheme = resolveTheme(draft.theme || savedSettings.theme || 'device', deviceTheme);
+  const deviceTheme = savedSettings.deviceTheme || 'pixel_storm';
+  const effectiveTheme = resolveTheme(draft.theme || savedSettings.theme || deviceTheme, deviceTheme);
   const displayLocation = draft.locationQuery || preview.locationName || savedSettings.locationName || savedSettings.locationQuery || 'Unknown location';
   const isDraftLocation = draft.locationQuery && draft.locationQuery !== (savedSettings.locationQuery || '');
   const units = draft.units || preview.units || savedSettings.units || 'metric';
@@ -516,7 +531,7 @@ function renderPreview(preview, draft = readDraftSettings()) {
     ? 'Connected'
     : (preview.bleAdvertising ? `Advertising${preview.bleLastEvent ? ` | ${preview.bleLastEvent}` : ''}` : 'Idle');
 
-  applyPageTheme(draft.theme || savedSettings.theme || 'device', deviceTheme);
+  applyPageTheme(draft.theme || savedSettings.theme || deviceTheme, deviceTheme);
   elements.syncPill.textContent = state.saveInFlight
     ? 'Syncing...'
     : (state.eventStreamOpen ? 'Live Sync SSE' : 'Live Sync Polling');
@@ -768,7 +783,7 @@ function bindEvents() {
     if (!state.settings) {
       return;
     }
-    applyPageTheme(elements.theme.value, state.settings.deviceTheme || 'dark');
+    applyPageTheme(elements.theme.value, state.settings.deviceTheme || 'pixel_storm');
   });
 
   document.addEventListener('visibilitychange', () => {

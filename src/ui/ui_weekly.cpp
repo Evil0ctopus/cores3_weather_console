@@ -8,7 +8,11 @@ void WeeklyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	theme_ = &theme;
 	root_ = lv_obj_create(parent);
 	lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
+	lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(root_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
 	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	ui_make_container_transparent(root_);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
 
 	title_ = lv_label_create(root_);
@@ -26,6 +30,8 @@ void WeeklyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_row(list_, theme.spacing().listRowGap, LV_PART_MAIN);
 	lv_obj_set_flex_flow(list_, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+	lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
 	lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_OFF);
 
 	for (size_t i = 0; i < kMaxForecastDays; ++i) {
@@ -39,8 +45,12 @@ void WeeklyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		lv_obj_set_style_pad_column(rowCards_[i], 12, LV_PART_MAIN);
 		lv_obj_clear_flag(rowCards_[i], LV_OBJ_FLAG_SCROLLABLE);
 
-		rowIcons_[i].begin(rowCards_[i], 34);
-		rowIcons_[i].setIcon(theme, theme.weatherIconToken(-1, true), theme.weatherIconColor(-1, true));
+		rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLOUDY, theme.themeId());
+		if (rowIcons_[i] != nullptr) {
+			ui_icon_set_size(rowIcons_[i], 34, 34);
+			rowIconIds_[i] = IconId::ICON_CLOUDY;
+			rowIconSet_[i] = true;
+		}
 
 		rowLabels_[i] = lv_label_create(rowCards_[i]);
 		lv_obj_set_flex_grow(rowLabels_[i], 1);
@@ -56,6 +66,8 @@ void WeeklyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 void WeeklyPage::applyTheme(ThemeManager& theme) {
 	theme_ = &theme;
 	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	ui_make_container_transparent(root_);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -66,7 +78,19 @@ void WeeklyPage::applyTheme(ThemeManager& theme) {
 		lv_obj_add_style(rowCards_[i], theme.cardAltStyle(), LV_PART_MAIN);
 		lv_obj_set_style_pad_all(rowCards_[i], theme.spacing().cardAltPadding, LV_PART_MAIN);
 		lv_obj_set_style_pad_column(rowCards_[i], 12, LV_PART_MAIN);
-		rowIcons_[i].applyTheme(theme);
+		
+		// Recreate icon for new theme
+		if (rowIcons_[i] != nullptr) {
+			ui_icon_delete(rowIcons_[i]);
+			rowIcons_[i] = nullptr;
+		}
+		rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLOUDY, theme.themeId());
+		if (rowIcons_[i] != nullptr) {
+			ui_icon_set_size(rowIcons_[i], 34, 34);
+			rowIconIds_[i] = IconId::ICON_CLOUDY;
+			rowIconSet_[i] = true;
+		}
+		
 		lv_obj_set_style_text_color(rowLabels_[i], theme.palette().textPrimary, LV_PART_MAIN);
 		lv_obj_set_style_text_font(rowLabels_[i], &lv_font_montserrat_14, LV_PART_MAIN);
 		lv_obj_set_style_transform_zoom(rowLabels_[i], theme.typography().weeklyRowZoom, LV_PART_MAIN);
@@ -86,7 +110,18 @@ void WeeklyPage::update(const WeatherData& data) {
 		}
 
 		for (size_t i = 0; i < kMaxForecastDays; ++i) {
-			rowIcons_[i].setIcon(*theme_, theme_->weatherIconToken(-1, true), theme_->weatherIconColor(-1, true));
+			if (!rowIconSet_[i] || rowIconIds_[i] != IconId::ICON_CLEAR_DAY) {
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_delete(rowIcons_[i]);
+					rowIcons_[i] = nullptr;
+				}
+				rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLEAR_DAY, theme_->themeId());
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_set_size(rowIcons_[i], 34, 34);
+					rowIconIds_[i] = IconId::ICON_CLEAR_DAY;
+					rowIconSet_[i] = true;
+				}
+			}
 			lv_label_set_text(rowLabels_[i], i == 0 ? message.c_str() : "Waiting for forecast");
 		}
 		return;
@@ -94,14 +129,37 @@ void WeeklyPage::update(const WeatherData& data) {
 
 	for (size_t i = 0; i < kMaxForecastDays; ++i) {
 		if (i >= data.forecastCount || !data.forecast[i].valid) {
-			rowIcons_[i].setIcon(*theme_, theme_->weatherIconToken(-1, true), theme_->weatherIconColor(-1, true));
+			if (!rowIconSet_[i] || rowIconIds_[i] != IconId::ICON_CLEAR_DAY) {
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_delete(rowIcons_[i]);
+					rowIcons_[i] = nullptr;
+				}
+				rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLEAR_DAY, theme_->themeId());
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_set_size(rowIcons_[i], 34, 34);
+					rowIconIds_[i] = IconId::ICON_CLEAR_DAY;
+					rowIconSet_[i] = true;
+				}
+			}
 			lv_label_set_text(rowLabels_[i], "No data");
 			continue;
 		}
 
 		const DailyForecast& f = data.forecast[i];
 		if (theme_ != nullptr) {
-			rowIcons_[i].setIcon(*theme_, theme_->weatherIconToken(f.dayIcon, true), theme_->weatherIconColor(f.dayIcon, true));
+			IconId id = ui_icon_from_condition_code(f.dayIcon, true);
+			if (!rowIconSet_[i] || rowIconIds_[i] != id) {
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_delete(rowIcons_[i]);
+					rowIcons_[i] = nullptr;
+				}
+				rowIcons_[i] = ui_icon_create(rowCards_[i], id, theme_->themeId());
+				if (rowIcons_[i] != nullptr) {
+					ui_icon_set_size(rowIcons_[i], 34, 34);
+					rowIconIds_[i] = id;
+					rowIconSet_[i] = true;
+				}
+			}
 		}
 		String line = f.dayLabel.length() > 0 ? f.dayLabel : String("Day ") + String(static_cast<unsigned>(i + 1));
 		line += "\n";

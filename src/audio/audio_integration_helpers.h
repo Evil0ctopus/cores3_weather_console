@@ -113,14 +113,25 @@ inline void SyncAudioTheme(ui::ThemeId uiTheme, audio::AudioEngine* engine) {
 	
 	audio::ThemeId audioTheme = audio::ThemeId::Default;
 	switch (uiTheme) {
-		case ui::ThemeId::Light:
+		case ui::ThemeId::DESERT_CALM:
+		case ui::ThemeId::DAYBREAK_CLEAR:
 			audioTheme = audio::ThemeId::Default;
 			break;
-		case ui::ThemeId::Dark:
+		case ui::ThemeId::PIXEL_STORM:
+		case ui::ThemeId::MIDNIGHT_RADAR:
+		case ui::ThemeId::STORMGLASS:
+		case ui::ThemeId::OCEAN_FRONT:
 			audioTheme = audio::ThemeId::Modern;
 			break;
-		case ui::ThemeId::FutureCustom1:
+		case ui::ThemeId::FUTURE_PULSE:
+		case ui::ThemeId::AURORA_LINE:
 			audioTheme = audio::ThemeId::Minimal;
+			break;
+		case ui::ThemeId::MONO_WIREFRAME:
+			audioTheme = audio::ThemeId::Retro;
+			break;
+		case ui::ThemeId::INFRARED_SCAN:
+			audioTheme = audio::ThemeId::Custom1;
 			break;
 		default:
 			audioTheme = audio::ThemeId::Default;

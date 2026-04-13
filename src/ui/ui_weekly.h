@@ -3,7 +3,7 @@
 #include <lvgl.h>
 
 #include "../weather/weather_models.h"
-#include "ui_weather_icon.h"
+#include "ui_icons.h"
 #include "ui_theme.h"
 
 namespace ui {
@@ -21,7 +21,9 @@ class WeeklyPage {
 	lv_obj_t* list_ = nullptr;
 	lv_obj_t* rowCards_[kMaxForecastDays] = {};
 	lv_obj_t* rowLabels_[kMaxForecastDays] = {};
-	WeatherIconView rowIcons_[kMaxForecastDays]{};
+	lv_obj_t* rowIcons_[kMaxForecastDays] = {};
+	IconId rowIconIds_[kMaxForecastDays] = {};
+	bool rowIconSet_[kMaxForecastDays] = {};
 };
 
 }  // namespace ui

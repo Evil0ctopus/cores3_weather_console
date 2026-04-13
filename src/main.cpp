@@ -11,7 +11,9 @@
 #include "system/settings.h"
 #include "system/time_manager.h"
 #include "system/wifi_manager.h"
-#include "ui/ui_boot.h"
+#include "ui/ui_assets.h"
+#include "ui/ui_boot_anim.h"
+#include "ui/ui_icons.h"
 #include "ui/ui_root.h"
 #include "ui/ui_system.h"
 #include "weather/radar_engine.h"
@@ -49,10 +51,13 @@ static void LvglTouchRead(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
 }
 
 void InitializeLvgl() {
+  Serial.println("[UI] InitializeLvgl() start");
   lv_init();
+  Serial.println("[UI] lv_init() complete");
 
   static lv_disp_draw_buf_t drawBuf;
   lv_disp_draw_buf_init(&drawBuf, sLvglBuf, nullptr, 320 * 20);
+  Serial.println("[UI] LVGL draw buffer initialized");
 
   static lv_disp_drv_t dispDrv;
   lv_disp_drv_init(&dispDrv);
@@ -61,12 +66,14 @@ void InitializeLvgl() {
   dispDrv.flush_cb = LvglDisplayFlush;
   dispDrv.draw_buf = &drawBuf;
   lv_disp_drv_register(&dispDrv);
+  Serial.println("[UI] LVGL display driver registered");
 
   static lv_indev_drv_t indevDrv;
   lv_indev_drv_init(&indevDrv);
   indevDrv.type = LV_INDEV_TYPE_POINTER;
   indevDrv.read_cb = LvglTouchRead;
   lv_indev_drv_register(&indevDrv);
+  Serial.println("[UI] LVGL input driver registered");
 }
 
 }  // namespace
@@ -76,7 +83,9 @@ namespace {
 weather::WeatherApi gWeatherApi;
 weather::RadarEngine gRadarEngine;
 ui::RootNavigator gUi;
-ui::BootAnimation gBootAnimation;
+ui::ThemeManager gBootTheme;
+lv_obj_t* gBootScreen = nullptr;
+lv_obj_t* gBootAnimObj = nullptr;
 led::LedEngine gLedEngine;
 audio::AudioEngine gAudioEngine;
 app::SettingsStore gSettings;
@@ -85,20 +94,13 @@ app::TimeManager gTime;
 web::WebServerHost gWebServer;
 
 bool gMainUiStarted = false;
+bool gLedEngineInitialized = false;
 bool gLastWifiConnected = false;
 bool gLastErrorState = false;
 uint8_t gLastPageIndex = 0xFF;
 uint32_t gLastBootWhooshMs = 0;
 size_t gLastRadarCompletedFrames = 0;
 uint32_t gLastSettingsRevision = 0;
-
-ui::ThemeId ThemeIdFromPreference(app::ThemePreference pref) {
-  switch (pref) {
-    case app::ThemePreference::Dark:         return ui::ThemeId::Dark;
-    case app::ThemePreference::FutureCustom1: return ui::ThemeId::FutureCustom1;
-    default:                                 return ui::ThemeId::Light;
-  }
-}
 
 constexpr uint8_t kSystemInfoPageIndex = 4;
 constexpr uint32_t kBootWhooshIntervalMs = 2200;
@@ -177,7 +179,21 @@ void OnSettingsSaved(void* userContext, const app::AppSettings& settings) {
   apiCfg.locationKey = settings.locationKey;
   apiCfg.useMetric = (settings.units == app::UnitsSystem::Metric);
   gWeatherApi.begin(apiCfg);
+  if (gMainUiStarted) {
+    gUi.setTheme(settings.theme);
+  } else {
+    gBootTheme.setTheme(settings.theme);
+  }
   gAudioEngine.playSystemSound(audio::SystemSound::SettingsSavedTone);
+}
+
+void InitializeLedEngineAfterBoot() {
+  if (gLedEngineInitialized) {
+    return;
+  }
+  gLedEngine.begin(96);
+  gLedEngineInitialized = true;
+  Serial.println("[LED] LED engine initialized");
 }
 
 void UpdateTouchFeedback() {
@@ -205,6 +221,9 @@ void UpdateTouchFeedback() {
   const int dx = detail.distanceX();
   const int dy = detail.distanceY();
   if (abs(dx) >= abs(dy)) {
+    if (abs(dx) >= 24) {
+      gUi.moveToAdjacentPage(dx < 0 ? 1 : -1, true);
+    }
     gLedEngine.touchEvent(dx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, dx, dy);
   } else {
     gLedEngine.touchEvent(dy >= 0 ? led::LedEngine::TouchKind::SwipeDown : led::LedEngine::TouchKind::SwipeUp, dx, dy);
@@ -258,13 +277,15 @@ void UpdateSystemEventAudio() {
 }
 
 void InitializeSubsystems() {
+  Serial.println("[UI] InitializeSubsystems() start");
   SPIFFS.begin(true);
+  ui::ui_asset_startup_report();
+  ui::ui_icon_startup_report();
 
   gSettings.begin();
   gDebugLog.begin(gSettings.settings().debugMode);
   gLastSettingsRevision = gSettings.revision();
 
-  gLedEngine.begin(96);
   gLedEngine.setEventCallback(OnLedEvent, nullptr);
 
   gAudioEngine.begin();
@@ -281,11 +302,21 @@ void InitializeSubsystems() {
   gTime.begin();
 
   // LVGL must be initialised before any UI widget is created.
+  Serial.println("[UI] Calling InitializeLvgl()");
   InitializeLvgl();
+  Serial.println("[UI] InitializeLvgl() finished");
 
   // Boot animation gets its own screen — shown immediately.
-  lv_obj_t* bootScreen = gBootAnimation.begin(ui::ThemeId::Light);
-  lv_disp_load_scr(bootScreen);
+  gBootTheme.begin(gSettings.get_theme());
+  gBootScreen = lv_obj_create(nullptr);
+  lv_obj_remove_style_all(gBootScreen);
+  lv_obj_set_style_bg_opa(gBootScreen, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(gBootScreen, lv_color_hex(0x030913), LV_PART_MAIN);
+  lv_obj_set_style_border_width(gBootScreen, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(gBootScreen, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(gBootScreen, 0, LV_PART_MAIN);
+  gBootAnimObj = ui::ui_boot_anim_play(gBootScreen, gBootTheme, nullptr, nullptr);
+  lv_disp_load_scr(gBootScreen);
   gAudioEngine.playBootSound(audio::BootSound::Whoosh);
   gLastBootWhooshMs = millis();
   // Main UI is created after boot animation finishes (see loop()).
@@ -322,11 +353,14 @@ void setup() {
   cfg.internal_mic = true;
   cfg.led_brightness = 64;
   M5.begin(cfg);
+  Serial.println("[UI] M5.begin() complete");
 
   if (M5.Display.width() < M5.Display.height()) {
     M5.Display.setRotation(M5.Display.getRotation() ^ 1);
   }
   M5.Display.setBrightness(128);
+  M5.Display.setSwapBytes(true);
+  Serial.println("[UI] Display initialized, brightness set, RGB565 swap enabled");
 
   InitializeSubsystems();
 }
@@ -335,24 +369,21 @@ void loop() {
   M5.update();
 
   if (!gMainUiStarted) {
-    if (gBootAnimation.update()) {
+    if (ui::ui_boot_anim_finished(gBootAnimObj)) {
+      InitializeLedEngineAfterBoot();
       gMainUiStarted = true;
       // Create the main UI on its own screen and switch to it.
       lv_obj_t* mainScreen = lv_obj_create(nullptr);
-      const ui::ThemeId themeId = ThemeIdFromPreference(gSettings.settings().theme);
-      gUi.begin(mainScreen, themeId);
+      ui::ui_make_transparent(mainScreen);
+      gUi.begin(mainScreen, gSettings);
       lv_disp_load_scr(mainScreen);
     } else {
+      ui::ui_boot_anim_update(gBootAnimObj);
       const uint32_t now = millis();
       if (!gAudioEngine.isPlaying() && (now - gLastBootWhooshMs) >= kBootWhooshIntervalMs) {
         gAudioEngine.playBootSound(audio::BootSound::Whoosh);
         gLastBootWhooshMs = now;
       }
-      gLedEngine.bootAnimation(gBootAnimation.ledPhase(),
-                               gBootAnimation.ledIntensity(),
-                               true,
-                               gBootAnimation.ledLockIn(),
-                               gBootAnimation.ledFadingOut());
       gAudioEngine.update();
       lv_timer_handler();
       delay(16);

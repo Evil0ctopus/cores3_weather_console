@@ -49,7 +49,7 @@ bool isValidUnitsRaw(uint8_t raw) {
 }
 
 bool isValidThemeRaw(uint8_t raw) {
-	return raw <= static_cast<uint8_t>(ThemePreference::FutureCustom1);
+	return raw < ui::theme_count();
 }
 
 bool isValidRadarModeRaw(uint8_t raw) {
@@ -129,6 +129,19 @@ const AppSettings& SettingsStore::settings() const {
 	return settings_;
 }
 
+ui::ThemeId SettingsStore::get_theme() const {
+	return settings_.theme;
+}
+
+bool SettingsStore::set_theme(ui::ThemeId theme) {
+	if (!initialized_) {
+		begin();
+	}
+	AppSettings next = settings_;
+	next.theme = theme;
+	return save(next);
+}
+
 uint32_t SettingsStore::revision() const {
 	return revision_;
 }
@@ -143,7 +156,7 @@ AppSettings SettingsStore::defaults() {
 	settings.wifiPassword = "";
 	settings.wifiAutoConnect = true;
 	settings.units = UnitsSystem::Metric;
-	settings.theme = ThemePreference::MatchDevice;
+	settings.theme = ui::ThemeId::PIXEL_STORM;
 	settings.radarMode = RadarMode::BaseReflectivity;
 	settings.radarAutoContrast = true;
 	settings.radarInterpolation = true;
@@ -185,7 +198,7 @@ bool SettingsStore::loadFromNvs() {
 	const uint8_t themeRaw = prefs.getUChar(kKeyTheme, static_cast<uint8_t>(loaded.theme));
 	const uint8_t radarRaw = prefs.getUChar(kKeyRadarMode, static_cast<uint8_t>(loaded.radarMode));
 	loaded.units = isValidUnitsRaw(unitsRaw) ? static_cast<UnitsSystem>(unitsRaw) : UnitsSystem::Metric;
-	loaded.theme = isValidThemeRaw(themeRaw) ? static_cast<ThemePreference>(themeRaw) : ThemePreference::MatchDevice;
+	loaded.theme = isValidThemeRaw(themeRaw) ? static_cast<ui::ThemeId>(themeRaw) : ui::ThemeId::PIXEL_STORM;
 	loaded.radarMode = isValidRadarModeRaw(radarRaw) ? static_cast<RadarMode>(radarRaw) : RadarMode::BaseReflectivity;
 	loaded.radarAutoContrast = prefs.getBool(kKeyRadarAutoContrast, loaded.radarAutoContrast);
 	loaded.radarInterpolation = prefs.getBool(kKeyRadarInterpolation, loaded.radarInterpolation);
@@ -212,18 +225,8 @@ String toString(UnitsSystem value) {
 	return "metric";
 }
 
-String toString(ThemePreference value) {
-	switch (value) {
-		case ThemePreference::MatchDevice:
-			return "device";
-		case ThemePreference::Light:
-			return "light";
-		case ThemePreference::Dark:
-			return "dark";
-		case ThemePreference::FutureCustom1:
-			return "future1";
-	}
-	return "device";
+String toString(ui::ThemeId value) {
+	return String(ui::theme_id_to_storage_key(value));
 }
 
 String toString(RadarMode value) {
@@ -252,26 +255,8 @@ bool parseUnitsSystem(const String& value, UnitsSystem& out) {
 	return false;
 }
 
-bool parseThemePreference(const String& value, ThemePreference& out) {
-	String normalizedValue = value;
-	normalizedValue.toLowerCase();
-	if (normalizedValue == "device") {
-		out = ThemePreference::MatchDevice;
-		return true;
-	}
-	if (normalizedValue == "light") {
-		out = ThemePreference::Light;
-		return true;
-	}
-	if (normalizedValue == "dark") {
-		out = ThemePreference::Dark;
-		return true;
-	}
-	if (normalizedValue == "future1") {
-		out = ThemePreference::FutureCustom1;
-		return true;
-	}
-	return false;
+bool parseThemeId(const String& value, ui::ThemeId& out) {
+	return ui::parse_theme_id(value, out);
 }
 
 bool parseRadarMode(const String& value, RadarMode& out) {
@@ -401,8 +386,8 @@ bool readSettingsJson(JsonVariantConst source,
 			outError = "theme must be a string.";
 			return false;
 		}
-		ThemePreference parsedTheme = next.theme;
-		if (!parseThemePreference(String(themeVar.as<const char*>()), parsedTheme)) {
+		ui::ThemeId parsedTheme = next.theme;
+		if (!parseThemeId(String(themeVar.as<const char*>()), parsedTheme)) {
 			outError = "Theme selection is invalid.";
 			return false;
 		}

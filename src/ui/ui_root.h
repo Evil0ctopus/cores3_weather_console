@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 
+#include "../system/settings.h"
 #include "../weather/radar_engine.h"
 #include "../weather/weather_models.h"
 #include "ui_alerts.h"
@@ -15,7 +16,7 @@ namespace ui {
 
 class RootNavigator {
  public:
-	void begin(lv_obj_t* screen, ThemeId themeId);
+	void begin(lv_obj_t* screen, app::SettingsStore& settingsStore);
 	void setTheme(ThemeId themeId);
 	ThemeId themeId() const;
 
@@ -24,11 +25,17 @@ class RootNavigator {
 	void setDebugOverlayText(const String& text);
 	void update(const WeatherData& data, weather::RadarEngine& radar, const SystemInfo& systemInfo);
 	uint8_t activePageIndex() const;
+	bool moveToAdjacentPage(int8_t delta, bool animated = true);
 
  private:
+	static void onThemeSelectedAdapter(void* userContext, ThemeId themeId);
+	void onThemeSelected(ThemeId themeId);
+
 	ThemeManager theme_;
+	app::SettingsStore* settingsStore_ = nullptr;
 
 	lv_obj_t* screen_ = nullptr;
+	lv_obj_t* backgroundLayer_ = nullptr;
 	lv_obj_t* tileview_ = nullptr;
 	lv_obj_t* currentTile_ = nullptr;
 	lv_obj_t* weeklyTile_ = nullptr;

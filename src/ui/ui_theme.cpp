@@ -5,42 +5,339 @@
 #include <SPIFFS.h>
 
 namespace ui {
+namespace {
+
+ThemeColors gThemeColors = {};
+ThemePalette gPalette = {};
+ThemeTypography gTypography = {};
+ThemeSpacing gSpacing = {};
+ThemeAccentRules gAccentRules = {};
+
+bool gStylesInitialized = false;
+lv_style_t gScreenStyle;
+lv_style_t gTabStyle;
+lv_style_t gCardStyle;
+lv_style_t gCardAltStyle;
+lv_style_t gLabelStyle;
+lv_style_t gTitleStyle;
+lv_style_t gBodyStyle;
+lv_style_t gCaptionStyle;
+lv_style_t gChipStyle;
+
+void ensureStylesInitialized() {
+	if (gStylesInitialized) {
+		return;
+	}
+	lv_style_init(&gScreenStyle);
+	lv_style_init(&gTabStyle);
+	lv_style_init(&gCardStyle);
+	lv_style_init(&gCardAltStyle);
+	lv_style_init(&gLabelStyle);
+	lv_style_init(&gTitleStyle);
+	lv_style_init(&gBodyStyle);
+	lv_style_init(&gCaptionStyle);
+	lv_style_init(&gChipStyle);
+	gStylesInitialized = true;
+}
+
+lv_color_t hexColor(uint32_t value) {
+	return lv_color_hex(value);
+}
+
+lv_color_t mixColor(uint32_t left, uint32_t right, uint8_t mix) {
+	return lv_color_mix(hexColor(left), hexColor(right), mix);
+}
+
+bool useLightText(uint32_t color) {
+	const uint32_t red = (color >> 16) & 0xFFU;
+	const uint32_t green = (color >> 8) & 0xFFU;
+	const uint32_t blue = color & 0xFFU;
+	const uint32_t luma = red * 299U + green * 587U + blue * 114U;
+	return luma < 140000U;
+}
+
+void rebuildThemeState(ThemeId id) {
+	gThemeColors = get_theme_colors(id);
+	gTypography = ThemeTypography();
+	gSpacing = ThemeSpacing();
+
+	gPalette.bg = hexColor(gThemeColors.bg_main);
+	gPalette.surface = hexColor(gThemeColors.bg_card);
+	gPalette.surfaceAlt = mixColor(gThemeColors.bg_card, gThemeColors.bg_tab, LV_OPA_50);
+	gPalette.textPrimary = hexColor(gThemeColors.text_primary);
+	gPalette.textSecondary = hexColor(gThemeColors.text_secondary);
+	gPalette.accent = hexColor(gThemeColors.accent_primary);
+	gPalette.shadow = hexColor(gThemeColors.border_soft);
+	gPalette.warning = hexColor(gThemeColors.accent_warning);
+
+	gAccentRules.chipText = useLightText(gThemeColors.accent_primary) ? lv_color_white() : lv_color_black();
+	gAccentRules.iconTint = hexColor(gThemeColors.accent_secondary);
+	gAccentRules.iconMutedTint = hexColor(gThemeColors.text_secondary);
+}
+
+void rebuildStyles() {
+	ensureStylesInitialized();
+
+	lv_style_reset(&gScreenStyle);
+	lv_style_set_bg_opa(&gScreenStyle, LV_OPA_COVER);
+	lv_style_set_bg_color(&gScreenStyle, hexColor(gThemeColors.bg_main));
+	lv_style_set_text_color(&gScreenStyle, hexColor(gThemeColors.text_primary));
+
+	lv_style_reset(&gTabStyle);
+	lv_style_set_bg_opa(&gTabStyle, LV_OPA_TRANSP);
+	lv_style_set_bg_color(&gTabStyle, hexColor(gThemeColors.bg_tab));
+	lv_style_set_border_width(&gTabStyle, 0);
+	lv_style_set_border_color(&gTabStyle, hexColor(gThemeColors.border_soft));
+	lv_style_set_radius(&gTabStyle, 0);
+
+	lv_style_reset(&gCardStyle);
+	lv_style_set_radius(&gCardStyle, gSpacing.cardRadius);
+	lv_style_set_bg_opa(&gCardStyle, LV_OPA_COVER);
+	lv_style_set_bg_color(&gCardStyle, hexColor(gThemeColors.bg_card));
+	lv_style_set_border_width(&gCardStyle, 1);
+	lv_style_set_border_color(&gCardStyle, hexColor(gThemeColors.border_soft));
+	lv_style_set_pad_all(&gCardStyle, gSpacing.cardPadding);
+	lv_style_set_shadow_opa(&gCardStyle, LV_OPA_TRANSP);
+	lv_style_set_shadow_width(&gCardStyle, 0);
+	lv_style_set_shadow_ofs_y(&gCardStyle, 0);
+
+	lv_style_reset(&gCardAltStyle);
+	lv_style_set_radius(&gCardAltStyle, gSpacing.cardAltRadius);
+	lv_style_set_bg_opa(&gCardAltStyle, LV_OPA_COVER);
+	lv_style_set_bg_color(&gCardAltStyle, mixColor(gThemeColors.bg_card, gThemeColors.bg_tab, LV_OPA_60));
+	lv_style_set_border_width(&gCardAltStyle, 1);
+	lv_style_set_border_color(&gCardAltStyle, hexColor(gThemeColors.border_soft));
+	lv_style_set_pad_all(&gCardAltStyle, gSpacing.cardAltPadding);
+	lv_style_set_shadow_opa(&gCardAltStyle, LV_OPA_TRANSP);
+	lv_style_set_shadow_width(&gCardAltStyle, 0);
+	lv_style_set_shadow_ofs_y(&gCardAltStyle, 0);
+
+	lv_style_reset(&gLabelStyle);
+	lv_style_set_text_color(&gLabelStyle, hexColor(gThemeColors.text_primary));
+	lv_style_set_text_font(&gLabelStyle, &lv_font_montserrat_14);
+
+	lv_style_reset(&gTitleStyle);
+	lv_style_set_text_color(&gTitleStyle, hexColor(gThemeColors.text_primary));
+	lv_style_set_text_font(&gTitleStyle, &lv_font_montserrat_14);
+	lv_style_set_text_letter_space(&gTitleStyle, gTypography.sectionLetterSpace);
+	lv_style_set_text_line_space(&gTitleStyle, gTypography.titleLineSpace);
+
+	lv_style_reset(&gBodyStyle);
+	lv_style_set_text_color(&gBodyStyle, hexColor(gThemeColors.text_primary));
+	lv_style_set_text_font(&gBodyStyle, &lv_font_montserrat_14);
+	lv_style_set_text_line_space(&gBodyStyle, gTypography.bodyLineSpace);
+
+	lv_style_reset(&gCaptionStyle);
+	lv_style_set_text_color(&gCaptionStyle, hexColor(gThemeColors.text_secondary));
+	lv_style_set_text_font(&gCaptionStyle, &lv_font_montserrat_14);
+	lv_style_set_text_line_space(&gCaptionStyle, gTypography.titleLineSpace);
+
+	lv_style_reset(&gChipStyle);
+	lv_style_set_radius(&gChipStyle, 999);
+	lv_style_set_bg_opa(&gChipStyle, LV_OPA_COVER);
+	lv_style_set_bg_color(&gChipStyle, hexColor(gThemeColors.accent_primary));
+	lv_style_set_text_color(&gChipStyle, gAccentRules.chipText);
+	lv_style_set_text_font(&gChipStyle, &lv_font_montserrat_14);
+	lv_style_set_pad_left(&gChipStyle, gSpacing.chipPadX);
+	lv_style_set_pad_right(&gChipStyle, gSpacing.chipPadX);
+	lv_style_set_pad_top(&gChipStyle, gSpacing.chipPadY);
+	lv_style_set_pad_bottom(&gChipStyle, gSpacing.chipPadY);
+}
+
+}  // namespace
+
+ThemeColors get_theme_colors(ThemeId id) {
+	switch (id) {
+		case ThemeId::PIXEL_STORM:
+			return ThemeColors{0x050816, 0x0b1020, 0x050816, 0xffb347, 0x4fd1ff, 0xff5c5c, 0xf5f7ff, 0xa3b0d0, 0x1a2238};
+		case ThemeId::DESERT_CALM:
+			return ThemeColors{0xf7f1e8, 0xf0e3d2, 0xf7f1e8, 0xd47b4a, 0xb89b6d, 0xc0392b, 0x2f2418, 0x7a6a55, 0xe0d2c0};
+		case ThemeId::FUTURE_PULSE:
+			return ThemeColors{0x02010a, 0x07071a, 0x02010a, 0xff2fbf, 0x00f0ff, 0xffb347, 0xf8f9ff, 0x9a9ccf, 0x191933};
+		case ThemeId::MIDNIGHT_RADAR:
+			return ThemeColors{0x06111b, 0x0d1c28, 0x08131e, 0x53e6ff, 0x7dff9b, 0xff7b54, 0xeef8ff, 0x93acbf, 0x1a3445};
+		case ThemeId::DAYBREAK_CLEAR:
+			return ThemeColors{0xeef6ff, 0xffffff, 0xe8f1fb, 0xff9f45, 0x4aa8ff, 0xd94c4c, 0x1d2a36, 0x60758a, 0xcbd9e7};
+		case ThemeId::STORMGLASS:
+			return ThemeColors{0x0a1720, 0x122532, 0x0d1d27, 0x79c7ff, 0xb2f7ef, 0xff8a5b, 0xf2fbff, 0x92aebc, 0x24404d};
+		case ThemeId::AURORA_LINE:
+			return ThemeColors{0x04110f, 0x0a1b19, 0x061412, 0x6df7c1, 0x7caeff, 0xffad5a, 0xf3fff9, 0x92b6ae, 0x18342f};
+		case ThemeId::OCEAN_FRONT:
+			return ThemeColors{0x061623, 0x0d2435, 0x081b2b, 0x4fc3f7, 0x7ef0d1, 0xff9860, 0xf1fbff, 0x8fb2c5, 0x1d3d53};
+		case ThemeId::MONO_WIREFRAME:
+			return ThemeColors{0x0f1012, 0x16181b, 0x111315, 0xd7d9de, 0x8f98a3, 0xff6b6b, 0xf2f4f8, 0xa0a6af, 0x2d333b};
+		case ThemeId::INFRARED_SCAN:
+			return ThemeColors{0x120505, 0x1d0909, 0x150606, 0xff6b35, 0xffc857, 0xff4040, 0xfff4ed, 0xd8a892, 0x3a1616};
+	}
+	return get_theme_colors(ThemeId::PIXEL_STORM);
+}
+
+const char* theme_id_to_name(ThemeId id) {
+	switch (id) {
+		case ThemeId::PIXEL_STORM:
+			return "Pixel Storm";
+		case ThemeId::DESERT_CALM:
+			return "Desert Calm";
+		case ThemeId::FUTURE_PULSE:
+			return "Future Pulse";
+		case ThemeId::MIDNIGHT_RADAR:
+			return "Midnight Radar";
+		case ThemeId::DAYBREAK_CLEAR:
+			return "Daybreak Clear";
+		case ThemeId::STORMGLASS:
+			return "Stormglass";
+		case ThemeId::AURORA_LINE:
+			return "Aurora Line";
+		case ThemeId::OCEAN_FRONT:
+			return "Ocean Front";
+		case ThemeId::MONO_WIREFRAME:
+			return "Mono Wireframe";
+		case ThemeId::INFRARED_SCAN:
+			return "Infrared Scan";
+	}
+	return "Pixel Storm";
+}
+
+const char* theme_id_to_storage_key(ThemeId id) {
+	switch (id) {
+		case ThemeId::PIXEL_STORM:
+			return "pixel_storm";
+		case ThemeId::DESERT_CALM:
+			return "desert_calm";
+		case ThemeId::FUTURE_PULSE:
+			return "future_pulse";
+		case ThemeId::MIDNIGHT_RADAR:
+			return "midnight_radar";
+		case ThemeId::DAYBREAK_CLEAR:
+			return "daybreak_clear";
+		case ThemeId::STORMGLASS:
+			return "stormglass";
+		case ThemeId::AURORA_LINE:
+			return "aurora_line";
+		case ThemeId::OCEAN_FRONT:
+			return "ocean_front";
+		case ThemeId::MONO_WIREFRAME:
+			return "mono_wireframe";
+		case ThemeId::INFRARED_SCAN:
+			return "infrared_scan";
+	}
+	return "pixel_storm";
+}
+
+bool parse_theme_id(const String& value, ThemeId& out) {
+	String normalizedValue = value;
+	normalizedValue.trim();
+	normalizedValue.toLowerCase();
+	for (uint8_t index = 0; index < theme_count(); ++index) {
+		const ThemeId candidate = theme_id_from_index(index);
+		String storageKey = String(theme_id_to_storage_key(candidate));
+		storageKey.toLowerCase();
+		if (normalizedValue == storageKey) {
+			out = candidate;
+			return true;
+		}
+
+		String displayName = String(theme_id_to_name(candidate));
+		displayName.toLowerCase();
+		displayName.replace(" ", "_");
+		if (normalizedValue == displayName) {
+			out = candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+uint8_t theme_count() {
+	return 10;
+}
+
+ThemeId theme_id_from_index(uint8_t index) {
+	if (index >= theme_count()) {
+		return ThemeId::PIXEL_STORM;
+	}
+	return static_cast<ThemeId>(index);
+}
+
+void ui_apply_theme_lvgl(ThemeId id) {
+	rebuildThemeState(id);
+	rebuildStyles();
+	lv_obj_report_style_change(nullptr);
+}
+
+void ui_theme_apply_to_root(lv_obj_t* root, ThemeId id) {
+	ui_apply_theme_lvgl(id);
+	if (root == nullptr) {
+		return;
+	}
+	lv_obj_add_style(root, &gScreenStyle, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(root, hexColor(gThemeColors.bg_main), LV_PART_MAIN);
+	lv_obj_set_style_text_color(root, hexColor(gThemeColors.text_primary), LV_PART_MAIN);
+	lv_obj_invalidate(root);
+}
+
+void ui_make_container_transparent(lv_obj_t* obj) {
+	if (obj == nullptr) {
+		Serial.println("[UI] ERROR: ui_make_container_transparent received null object.");
+		return;
+	}
+	lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_border_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_outline_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	Serial.println("[UI] Transparency applied");
+}
+
+void ui_make_transparent(lv_obj_t* obj) {
+	if (obj == nullptr) {
+		Serial.println("[UI] ERROR: ui_make_transparent received null object.");
+		return;
+	}
+	lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_border_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_outline_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+	Serial.println("[UI] Transparency applied");
+}
+
+void ui_style_card(lv_obj_t* obj, const ThemeManager& theme) {
+	if (obj == nullptr) {
+		Serial.println("[UI] ERROR: ui_style_card received null object.");
+		return;
+	}
+	
+	// Get theme colors
+	const ThemeColors colors = get_theme_colors(theme.themeId());
+	
+	// Semi-transparent background overlay (40% opacity)
+	lv_obj_set_style_bg_opa(obj, LV_OPA_40, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(obj, lv_color_hex(colors.bg_card), LV_PART_MAIN);
+	
+	// Rounded corners
+	lv_obj_set_style_radius(obj, 12, LV_PART_MAIN);
+	
+	// Subtle border overlay (20% opacity)
+	lv_obj_set_style_border_opa(obj, LV_OPA_20, LV_PART_MAIN);
+	lv_obj_set_style_border_color(obj, lv_color_hex(colors.border_soft), LV_PART_MAIN);
+	lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN);
+	
+	Serial.println("[UI] Styled card overlay");
+}
 
 ThemeManager::ThemeManager() = default;
 
-ThemeManager::~ThemeManager() {
-	if (!initialized_) {
-		return;
-	}
-	lv_style_reset(&screenStyle_);
-	lv_style_reset(&cardStyle_);
-	lv_style_reset(&cardAltStyle_);
-	lv_style_reset(&titleStyle_);
-	lv_style_reset(&bodyStyle_);
-	lv_style_reset(&captionStyle_);
-	lv_style_reset(&chipStyle_);
-}
+ThemeManager::~ThemeManager() = default;
 
 void ThemeManager::begin(ThemeId id) {
-	if (!initialized_) {
-		lv_style_init(&screenStyle_);
-		lv_style_init(&cardStyle_);
-		lv_style_init(&cardAltStyle_);
-		lv_style_init(&titleStyle_);
-		lv_style_init(&bodyStyle_);
-		lv_style_init(&captionStyle_);
-		lv_style_init(&chipStyle_);
-		initialized_ = true;
-	}
+	initialized_ = true;
 	loadIconMap();
 	setTheme(id);
 }
 
 void ThemeManager::setTheme(ThemeId id) {
 	themeId_ = id;
-	applyFallbackTheme(id);
-	loadThemeFromJson(id);
-	initStyles();
+	ui_apply_theme_lvgl(id);
+	Serial.printf("[THEME] Theme set id=%d name=%s\n", static_cast<int>(id), theme_id_to_name(id));
 }
 
 ThemeId ThemeManager::themeId() const {
@@ -48,19 +345,19 @@ ThemeId ThemeManager::themeId() const {
 }
 
 const ThemePalette& ThemeManager::palette() const {
-	return palette_;
+	return gPalette;
 }
 
 const ThemeTypography& ThemeManager::typography() const {
-	return typography_;
+	return gTypography;
 }
 
 const ThemeSpacing& ThemeManager::spacing() const {
-	return spacing_;
+	return gSpacing;
 }
 
 const ThemeAccentRules& ThemeManager::accentRules() const {
-	return accentRules_;
+	return gAccentRules;
 }
 
 String ThemeManager::weatherIconToken(int conditionCode, bool isDaylight) const {
@@ -82,192 +379,48 @@ lv_color_t ThemeManager::weatherIconColor(int conditionCode, bool isDaylight) co
 }
 
 lv_style_t* ThemeManager::screenStyle() {
-	return &screenStyle_;
+	ensureStylesInitialized();
+	return &gScreenStyle;
 }
 
 lv_style_t* ThemeManager::cardStyle() {
-	return &cardStyle_;
+	ensureStylesInitialized();
+	return &gCardStyle;
 }
 
 lv_style_t* ThemeManager::cardAltStyle() {
-	return &cardAltStyle_;
+	ensureStylesInitialized();
+	return &gCardAltStyle;
 }
 
 lv_style_t* ThemeManager::titleStyle() {
-	return &titleStyle_;
+	ensureStylesInitialized();
+	return &gTitleStyle;
 }
 
 lv_style_t* ThemeManager::bodyStyle() {
-	return &bodyStyle_;
+	ensureStylesInitialized();
+	return &gBodyStyle;
 }
 
 lv_style_t* ThemeManager::captionStyle() {
-	return &captionStyle_;
+	ensureStylesInitialized();
+	return &gCaptionStyle;
 }
 
 lv_style_t* ThemeManager::chipStyle() {
-	return &chipStyle_;
+	ensureStylesInitialized();
+	return &gChipStyle;
 }
 
-void ThemeManager::initStyles() {
-	lv_style_reset(&screenStyle_);
-	lv_style_set_bg_opa(&screenStyle_, LV_OPA_COVER);
-	lv_style_set_bg_color(&screenStyle_, palette_.bg);
-	lv_style_set_bg_grad_color(&screenStyle_, palette_.surfaceAlt);
-	lv_style_set_bg_grad_dir(&screenStyle_, LV_GRAD_DIR_VER);
-
-	lv_style_reset(&cardStyle_);
-	lv_style_set_radius(&cardStyle_, spacing_.cardRadius);
-	lv_style_set_bg_opa(&cardStyle_, LV_OPA_COVER);
-	lv_style_set_bg_color(&cardStyle_, palette_.surface);
-	lv_style_set_border_width(&cardStyle_, 0);
-	lv_style_set_pad_all(&cardStyle_, spacing_.cardPadding);
-	lv_style_set_shadow_color(&cardStyle_, palette_.shadow);
-	lv_style_set_shadow_opa(&cardStyle_, LV_OPA_20);
-	lv_style_set_shadow_width(&cardStyle_, 20);
-	lv_style_set_shadow_ofs_y(&cardStyle_, 6);
-
-	lv_style_reset(&cardAltStyle_);
-	lv_style_set_radius(&cardAltStyle_, spacing_.cardAltRadius);
-	lv_style_set_bg_opa(&cardAltStyle_, LV_OPA_COVER);
-	lv_style_set_bg_color(&cardAltStyle_, palette_.surfaceAlt);
-	lv_style_set_pad_all(&cardAltStyle_, spacing_.cardAltPadding);
-	lv_style_set_shadow_color(&cardAltStyle_, palette_.shadow);
-	lv_style_set_shadow_opa(&cardAltStyle_, LV_OPA_10);
-	lv_style_set_shadow_width(&cardAltStyle_, 12);
-	lv_style_set_shadow_ofs_y(&cardAltStyle_, 3);
-
-	lv_style_reset(&titleStyle_);
-	lv_style_set_text_color(&titleStyle_, palette_.textPrimary);
-	lv_style_set_text_font(&titleStyle_, &lv_font_montserrat_14);
-	lv_style_set_text_letter_space(&titleStyle_, typography_.sectionLetterSpace);
-	lv_style_set_text_line_space(&titleStyle_, typography_.titleLineSpace);
-
-	lv_style_reset(&bodyStyle_);
-	lv_style_set_text_color(&bodyStyle_, palette_.textPrimary);
-	lv_style_set_text_font(&bodyStyle_, &lv_font_montserrat_14);
-	lv_style_set_text_line_space(&bodyStyle_, typography_.bodyLineSpace);
-
-	lv_style_reset(&captionStyle_);
-	lv_style_set_text_color(&captionStyle_, palette_.textSecondary);
-	lv_style_set_text_font(&captionStyle_, &lv_font_montserrat_14);
-	lv_style_set_text_line_space(&captionStyle_, typography_.titleLineSpace);
-
-	lv_style_reset(&chipStyle_);
-	lv_style_set_radius(&chipStyle_, 999);
-	lv_style_set_bg_opa(&chipStyle_, LV_OPA_COVER);
-	lv_style_set_bg_color(&chipStyle_, palette_.accent);
-	lv_style_set_text_color(&chipStyle_, accentRules_.chipText);
-	lv_style_set_text_font(&chipStyle_, &lv_font_montserrat_14);
-	lv_style_set_pad_left(&chipStyle_, spacing_.chipPadX);
-	lv_style_set_pad_right(&chipStyle_, spacing_.chipPadX);
-	lv_style_set_pad_top(&chipStyle_, spacing_.chipPadY);
-	lv_style_set_pad_bottom(&chipStyle_, spacing_.chipPadY);
+lv_style_t* ThemeManager::tabStyle() {
+	ensureStylesInitialized();
+	return &gTabStyle;
 }
 
-void ThemeManager::applyFallbackTheme(ThemeId id) {
-	if (id == ThemeId::Light) {
-		palette_.bg = lv_color_hex(0xEEF2F6);
-		palette_.surface = lv_color_hex(0xFFFFFF);
-		palette_.surfaceAlt = lv_color_hex(0xF6F8FB);
-		palette_.textPrimary = lv_color_hex(0x111827);
-		palette_.textSecondary = lv_color_hex(0x64748B);
-		palette_.accent = lv_color_hex(0x1E88FF);
-		palette_.shadow = lv_color_hex(0xA5B4C7);
-		palette_.warning = lv_color_hex(0xE45B58);
-		accentRules_.chipText = lv_color_hex(0xFFFFFF);
-		accentRules_.iconTint = lv_color_hex(0x1E88FF);
-		accentRules_.iconMutedTint = lv_color_hex(0x64748B);
-	} else if (id == ThemeId::Dark) {
-		palette_.bg = lv_color_hex(0x0D1118);
-		palette_.surface = lv_color_hex(0x171E2A);
-		palette_.surfaceAlt = lv_color_hex(0x1E2734);
-		palette_.textPrimary = lv_color_hex(0xEEF2F8);
-		palette_.textSecondary = lv_color_hex(0x9CA8BA);
-		palette_.accent = lv_color_hex(0x5AB1FF);
-		palette_.shadow = lv_color_hex(0x02050B);
-		palette_.warning = lv_color_hex(0xFF7A7A);
-		accentRules_.chipText = lv_color_hex(0x0D1118);
-		accentRules_.iconTint = lv_color_hex(0x5AB1FF);
-		accentRules_.iconMutedTint = lv_color_hex(0x9CA8BA);
-	} else {
-		palette_.bg = lv_color_hex(0x151922);
-		palette_.surface = lv_color_hex(0x1D2430);
-		palette_.surfaceAlt = lv_color_hex(0x273142);
-		palette_.textPrimary = lv_color_hex(0xF3F5FA);
-		palette_.textSecondary = lv_color_hex(0xA0ADC4);
-		palette_.accent = lv_color_hex(0x5AB1FF);
-		palette_.shadow = lv_color_hex(0x030509);
-		palette_.warning = lv_color_hex(0xFF7A7A);
-		accentRules_.chipText = lv_color_hex(0x151922);
-		accentRules_.iconTint = lv_color_hex(0x5AB1FF);
-		accentRules_.iconMutedTint = lv_color_hex(0xA0ADC4);
-	}
-
-	typography_ = ThemeTypography();
-	spacing_ = ThemeSpacing();
-}
-
-void ThemeManager::loadThemeFromJson(ThemeId id) {
-	if (!ensureFilesystemReady()) {
-		return;
-	}
-
-	File file = SPIFFS.open(themePath(id).c_str(), FILE_READ);
-	if (!file) {
-		return;
-	}
-
-	JsonDocument doc;
-	if (deserializeJson(doc, file) != DeserializationError::Ok) {
-		file.close();
-		return;
-	}
-	file.close();
-
-	JsonObject colors = doc["colors"].as<JsonObject>();
-	palette_.bg = parseColor(colors["bg"] | nullptr, palette_.bg);
-	palette_.surface = parseColor(colors["surface"] | nullptr, palette_.surface);
-	palette_.surfaceAlt = parseColor(colors["surfaceAlt"] | nullptr, palette_.surfaceAlt);
-	palette_.textPrimary = parseColor(colors["textPrimary"] | nullptr, palette_.textPrimary);
-	palette_.textSecondary = parseColor(colors["textSecondary"] | nullptr, palette_.textSecondary);
-	palette_.accent = parseColor(colors["accent"] | nullptr, palette_.accent);
-	palette_.shadow = parseColor(colors["shadow"] | nullptr, palette_.shadow);
-	palette_.warning = parseColor(colors["warning"] | nullptr, palette_.warning);
-
-	JsonObject typography = doc["typography"].as<JsonObject>();
-	typography_.sectionLetterSpace = typography["sectionLetterSpace"] | typography_.sectionLetterSpace;
-	typography_.titleLineSpace = typography["titleLineSpace"] | typography_.titleLineSpace;
-	typography_.bodyLineSpace = typography["bodyLineSpace"] | typography_.bodyLineSpace;
-	typography_.summaryLineSpace = typography["summaryLineSpace"] | typography_.summaryLineSpace;
-	typography_.pageTitleZoom = typography["pageTitleZoom"] | typography_.pageTitleZoom;
-	typography_.captionZoom = typography["captionZoom"] | typography_.captionZoom;
-	typography_.heroValueZoom = typography["heroValueZoom"] | typography_.heroValueZoom;
-	typography_.heroSummaryZoom = typography["heroSummaryZoom"] | typography_.heroSummaryZoom;
-	typography_.weeklyRowZoom = typography["weeklyRowZoom"] | typography_.weeklyRowZoom;
-	typography_.alertRowZoom = typography["alertRowZoom"] | typography_.alertRowZoom;
-	typography_.bootTitleZoom = typography["bootTitleZoom"] | typography_.bootTitleZoom;
-
-	JsonObject spacing = doc["spacing"].as<JsonObject>();
-	spacing_.screenPadding = spacing["screenPadding"] | spacing_.screenPadding;
-	spacing_.cardPadding = spacing["cardPadding"] | spacing_.cardPadding;
-	spacing_.currentCardPadding = spacing["currentCardPadding"] | spacing_.currentCardPadding;
-	spacing_.cardAltPadding = spacing["cardAltPadding"] | spacing_.cardAltPadding;
-	spacing_.cardRadius = spacing["cardRadius"] | spacing_.cardRadius;
-	spacing_.cardAltRadius = spacing["cardAltRadius"] | spacing_.cardAltRadius;
-	spacing_.listRowGap = spacing["listRowGap"] | spacing_.listRowGap;
-	spacing_.weeklyListTop = spacing["weeklyListTop"] | spacing_.weeklyListTop;
-	spacing_.alertsListTop = spacing["alertsListTop"] | spacing_.alertsListTop;
-	spacing_.imageRadius = spacing["imageRadius"] | spacing_.imageRadius;
-	spacing_.chipPadX = spacing["chipPadX"] | spacing_.chipPadX;
-	spacing_.chipPadY = spacing["chipPadY"] | spacing_.chipPadY;
-	spacing_.iconChipPadX = spacing["iconChipPadX"] | spacing_.iconChipPadX;
-	spacing_.iconChipPadY = spacing["iconChipPadY"] | spacing_.iconChipPadY;
-
-	JsonObject accent = doc["accent"].as<JsonObject>();
-	accentRules_.chipText = parseColor(accent["chipText"] | nullptr, accentRules_.chipText);
-	accentRules_.iconTint = parseColor(accent["iconTint"] | nullptr, accentRules_.iconTint);
-	accentRules_.iconMutedTint = parseColor(accent["iconMutedTint"] | nullptr, accentRules_.iconMutedTint);
+lv_style_t* ThemeManager::defaultLabelStyle() {
+	ensureStylesInitialized();
+	return &gLabelStyle;
 }
 
 void ThemeManager::loadIconMap() {
@@ -314,16 +467,6 @@ void ThemeManager::loadIconMap() {
 	iconMapLoaded_ = true;
 }
 
-String ThemeManager::themePath(ThemeId id) const {
-	if (id == ThemeId::Light) {
-		return String("/themes/light.json");
-	}
-	if (id == ThemeId::Dark) {
-		return String("/themes/dark.json");
-	}
-	return String("/themes/future1.json");
-}
-
 bool ThemeManager::ensureFilesystemReady() {
 	if (filesystemReady_) {
 		return true;
@@ -333,32 +476,24 @@ bool ThemeManager::ensureFilesystemReady() {
 }
 
 lv_color_t ThemeManager::parseColor(const char* value, lv_color_t fallback) const {
-	if (value == nullptr || value[0] == '\0') {
-		return fallback;
-	}
-	const char* start = value[0] == '#' ? value + 1 : value;
-	char* endPtr = nullptr;
-	const unsigned long parsed = strtoul(start, &endPtr, 16);
-	if (endPtr == start) {
-		return fallback;
-	}
-	return lv_color_hex(static_cast<uint32_t>(parsed));
+	(void)value;
+	return fallback;
 }
 
 lv_color_t ThemeManager::colorForRole(const String& role) const {
 	if (role == "accent" || role == "iconTint") {
-		return accentRules_.iconTint;
+		return gAccentRules.iconTint;
 	}
 	if (role == "warning") {
-		return palette_.warning;
+		return gPalette.warning;
 	}
 	if (role == "textSecondary") {
-		return palette_.textSecondary;
+		return gPalette.textSecondary;
 	}
 	if (role == "textPrimary") {
-		return palette_.textPrimary;
+		return gPalette.textPrimary;
 	}
-	return accentRules_.iconMutedTint;
+	return gAccentRules.iconMutedTint;
 }
 
 }  // namespace ui

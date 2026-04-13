@@ -5,8 +5,13 @@ namespace ui {
 void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	root_ = lv_obj_create(parent);
 	lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(root_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
+	
+	// Apply semi-transparent card overlay style
+	ui_style_card(root_, theme);
 
 	title_ = lv_label_create(root_);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
@@ -30,6 +35,8 @@ void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_row(list_, theme.spacing().listRowGap, LV_PART_MAIN);
 	lv_obj_set_flex_flow(list_, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+	lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
 	lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_OFF);
 
 	for (size_t i = 0; i < kMaxWeatherAlerts; ++i) {
@@ -48,6 +55,8 @@ void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 
 void AlertsPage::applyTheme(ThemeManager& theme) {
 	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	ui_make_container_transparent(root_);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);

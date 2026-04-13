@@ -3,18 +3,13 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
+#include "../ui/ui_theme.h"
+
 namespace app {
 
 enum class UnitsSystem : uint8_t {
 	Metric = 0,
 	Imperial,
-};
-
-enum class ThemePreference : uint8_t {
-	MatchDevice = 0,
-	Light,
-	Dark,
-	FutureCustom1,
 };
 
 enum class RadarMode : uint8_t {
@@ -32,7 +27,7 @@ struct AppSettings {
 	String wifiPassword;
 	bool wifiAutoConnect = true;
 	UnitsSystem units = UnitsSystem::Metric;
-	ThemePreference theme = ThemePreference::MatchDevice;
+	ui::ThemeId theme = ui::ThemeId::PIXEL_STORM;
 	RadarMode radarMode = RadarMode::BaseReflectivity;
 	bool radarAutoContrast = true;
 	bool radarInterpolation = true;
@@ -52,6 +47,8 @@ class SettingsStore {
 	bool saveWifiSettings(const String& ssid, const String& password, bool autoConnect);
 
 	const AppSettings& settings() const;
+	ui::ThemeId get_theme() const;
+	bool set_theme(ui::ThemeId theme);
 	uint32_t revision() const;
 
 	static AppSettings defaults();
@@ -66,11 +63,11 @@ class SettingsStore {
 };
 
 String toString(UnitsSystem value);
-String toString(ThemePreference value);
+String toString(ui::ThemeId value);
 String toString(RadarMode value);
 
 bool parseUnitsSystem(const String& value, UnitsSystem& out);
-bool parseThemePreference(const String& value, ThemePreference& out);
+bool parseThemeId(const String& value, ui::ThemeId& out);
 bool parseRadarMode(const String& value, RadarMode& out);
 
 void writeSettingsJson(JsonDocument& doc, const AppSettings& settings);

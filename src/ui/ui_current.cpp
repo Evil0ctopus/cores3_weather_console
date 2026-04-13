@@ -1,6 +1,7 @@
 #include "ui_current.h"
 
 #include <math.h>
+#include "ui_icons.h"
 
 namespace ui {
 
@@ -8,8 +9,13 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	theme_ = &theme;
 	root_ = lv_obj_create(parent);
 	lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(root_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().currentCardPadding, LV_PART_MAIN);
+	
+	// Apply semi-transparent card overlay style
+	ui_style_card(root_, theme);
 
 	cityLabel_ = lv_label_create(root_);
 	lv_obj_add_style(cityLabel_, theme.captionStyle(), LV_PART_MAIN);
@@ -18,9 +24,14 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	lv_label_set_text(cityLabel_, "Location");
 	lv_obj_align(cityLabel_, LV_ALIGN_TOP_LEFT, 0, 0);
 
-	iconView_.begin(root_, 40);
-	iconView_.setIcon(theme, theme.weatherIconToken(-1, true), theme.weatherIconColor(-1, true));
-	lv_obj_align(iconView_.root(), LV_ALIGN_TOP_RIGHT, 0, 0);
+	// Create PNG weather icon
+	iconObj_ = ui_icon_create(root_, IconId::ICON_CLEAR_DAY, theme.themeId());
+	if (iconObj_ != nullptr) {
+		ui_icon_set_size(iconObj_, 40, 40);
+		lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
+		displayedIconId_ = IconId::ICON_CLEAR_DAY;
+		hasDisplayedIcon_ = true;
+	}
 
 	tempLabel_ = lv_label_create(root_);
 	lv_obj_set_style_text_color(tempLabel_, theme.palette().textPrimary, LV_PART_MAIN);
@@ -49,12 +60,29 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 
 void CurrentPage::applyTheme(ThemeManager& theme) {
 	theme_ = &theme;
-	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
+	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, theme.spacing().currentCardPadding, LV_PART_MAIN);
+	
+	// Reapply semi-transparent card overlay for new theme
+	ui_style_card(root_, theme);
+	
 	lv_obj_add_style(cityLabel_, theme.captionStyle(), LV_PART_MAIN);
 	lv_obj_set_style_transform_zoom(cityLabel_, theme.typography().captionZoom, LV_PART_MAIN);
-	iconView_.applyTheme(theme);
-	iconView_.setIcon(theme, theme.weatherIconToken(lastConditionCode_, lastIsDaylight_), theme.weatherIconColor(lastConditionCode_, lastIsDaylight_));
+	
+	// Recreate icon for new theme
+	if (iconObj_ != nullptr) {
+		ui_icon_delete(iconObj_);
+		iconObj_ = nullptr;
+	}
+	IconId id = ui_icon_from_condition_code(lastConditionCode_, lastIsDaylight_);
+	iconObj_ = ui_icon_create(root_, id, theme.themeId());
+	if (iconObj_ != nullptr) {
+		ui_icon_set_size(iconObj_, 40, 40);
+		lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
+		displayedIconId_ = id;
+		hasDisplayedIcon_ = true;
+	}
+	
 	lv_obj_add_style(tempLabel_, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_transform_zoom(tempLabel_, theme.typography().heroValueZoom, LV_PART_MAIN);
 	lv_obj_add_style(summaryLabel_, theme.bodyStyle(), LV_PART_MAIN);
@@ -106,8 +134,18 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 		}
 		lv_label_set_text(summaryLabel_, summary.c_str());
 		lv_label_set_text(detailsLabel_, details.c_str());
-		if (theme_ != nullptr) {
-			iconView_.setIcon(*theme_, theme_->weatherIconToken(-1, true), theme_->weatherIconColor(-1, true));
+		if (theme_ != nullptr && (!hasDisplayedIcon_ || displayedIconId_ != IconId::ICON_CLEAR_DAY)) {
+			if (iconObj_ != nullptr) {
+				ui_icon_delete(iconObj_);
+				iconObj_ = nullptr;
+			}
+			iconObj_ = ui_icon_create(root_, IconId::ICON_CLEAR_DAY, theme_->themeId());
+			if (iconObj_ != nullptr) {
+				ui_icon_set_size(iconObj_, 40, 40);
+				lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
+				displayedIconId_ = IconId::ICON_CLEAR_DAY;
+				hasDisplayedIcon_ = true;
+			}
 		}
 		return;
 	}
@@ -115,7 +153,20 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 	lastConditionCode_ = data.current.icon;
 	lastIsDaylight_ = data.current.isDaylight;
 	if (theme_ != nullptr) {
-		iconView_.setIcon(*theme_, theme_->weatherIconToken(lastConditionCode_, lastIsDaylight_), theme_->weatherIconColor(lastConditionCode_, lastIsDaylight_));
+		IconId id = ui_icon_from_condition_code(lastConditionCode_, lastIsDaylight_);
+		if (!hasDisplayedIcon_ || displayedIconId_ != id) {
+			if (iconObj_ != nullptr) {
+				ui_icon_delete(iconObj_);
+				iconObj_ = nullptr;
+			}
+			iconObj_ = ui_icon_create(root_, id, theme_->themeId());
+			if (iconObj_ != nullptr) {
+				ui_icon_set_size(iconObj_, 40, 40);
+				lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
+				displayedIconId_ = id;
+				hasDisplayedIcon_ = true;
+			}
+		}
 	}
 
 	String temp = isnan(data.current.temperatureC)
