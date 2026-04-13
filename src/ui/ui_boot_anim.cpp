@@ -10,7 +10,7 @@ namespace {
 
 constexpr uint8_t kMaxFrames = 60;
 constexpr uint32_t kFrameIntervalMs = 33;
-constexpr uint32_t kFallbackDisplayMs = 1600;
+constexpr uint32_t kFallbackDisplayMs = 2200;
 constexpr uint32_t kBootBackdropColor = 0x030913;
 constexpr uint32_t kBootAccentA = 0x3FE0FF;
 constexpr uint32_t kBootAccentB = 0xFF4FD8;
@@ -68,8 +68,42 @@ lv_obj_t* create_fallback(lv_obj_t* parent, const ThemeManager& theme) {
 	lv_obj_set_style_radius(fallback, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(fallback, 0, LV_PART_MAIN);
 	lv_obj_clear_flag(fallback, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_move_background(fallback);
 	Serial.println("[BOOT] Fallback solid background active");
 	return fallback;
+}
+
+void bring_overlay_to_front(BootAnimContext* ctx) {
+	if (ctx == nullptr) {
+		return;
+	}
+	if (ctx->backdropObj != nullptr) {
+		lv_obj_move_background(ctx->backdropObj);
+	}
+	if (ctx->fallbackObj != nullptr) {
+		lv_obj_move_background(ctx->fallbackObj);
+	}
+	if (ctx->imageObj != nullptr) {
+		lv_obj_move_foreground(ctx->imageObj);
+	}
+	if (ctx->sweepArc != nullptr) {
+		lv_obj_move_foreground(ctx->sweepArc);
+	}
+	if (ctx->pulseArc != nullptr) {
+		lv_obj_move_foreground(ctx->pulseArc);
+	}
+	if (ctx->centerDot != nullptr) {
+		lv_obj_move_foreground(ctx->centerDot);
+	}
+	if (ctx->titleLabel != nullptr) {
+		lv_obj_move_foreground(ctx->titleLabel);
+	}
+	if (ctx->statusLabel != nullptr) {
+		lv_obj_move_foreground(ctx->statusLabel);
+	}
+	if (ctx->progressBar != nullptr) {
+		lv_obj_move_foreground(ctx->progressBar);
+	}
 }
 
 void create_overlay(BootAnimContext* ctx) {
@@ -143,6 +177,7 @@ void create_overlay(BootAnimContext* ctx) {
 	lv_obj_set_style_radius(ctx->progressBar, 5, LV_PART_INDICATOR);
 	lv_obj_align(ctx->progressBar, LV_ALIGN_CENTER, 0, 118);
 	lv_obj_move_foreground(ctx->progressBar);
+	bring_overlay_to_front(ctx);
 }
 
 void update_overlay(BootAnimContext* ctx) {
@@ -198,6 +233,8 @@ void update_overlay(BootAnimContext* ctx) {
 		}
 		lv_label_set_text(ctx->statusLabel, text.c_str());
 	}
+
+	bring_overlay_to_front(ctx);
 }
 
 void fire_complete(BootAnimContext* ctx) {
@@ -252,6 +289,7 @@ void enter_fallback(BootAnimContext* ctx, const char* reason) {
 	}
 	ctx->fallbackObj = create_fallback(ctx->container, ctx->theme);
 	ctx->fallbackStartMs = lv_tick_get();
+	bring_overlay_to_front(ctx);
 	Serial.printf("[BOOT] Fallback reason: %s\n", reason != nullptr ? reason : "unknown");
 	Serial.println("[ASSET] Auto-recovery engaged");
 }

@@ -3,6 +3,15 @@
 namespace ui {
 namespace {
 
+constexpr lv_coord_t kSystemPagePadding = 8;
+constexpr lv_coord_t kSystemThemeLabelY = 4;
+constexpr lv_coord_t kSystemDropdownY = 22;
+constexpr lv_coord_t kSystemDropdownHeight = 38;
+constexpr lv_coord_t kSystemListY = 68;
+constexpr lv_coord_t kSystemListHeight = 160;
+constexpr lv_coord_t kSystemCardHeight = 116;
+constexpr lv_coord_t kSystemCardGap = 8;
+
 void setRow(lv_obj_t* label, const char* heading, const String& value) {
 	String text = String(heading) + "\n" + value;
 	lv_label_set_text(label, text.c_str());
@@ -36,53 +45,57 @@ void SystemPage::begin(lv_obj_t* parent,
 	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
 	ui_make_container_transparent(root_);
 	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
-	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
+	lv_obj_set_style_pad_all(root_, kSystemPagePadding, LV_PART_MAIN);
 
 	title_ = lv_label_create(root_);
-	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
-	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(title_, theme.typography().pageTitleZoom, LV_PART_MAIN);
-	lv_label_set_text(title_, "System");
-	lv_obj_align(title_, LV_ALIGN_TOP_LEFT, 0, 0);
+	lv_obj_add_flag(title_, LV_OBJ_FLAG_HIDDEN);
 
 	subtitle_ = lv_label_create(root_);
-	lv_obj_add_style(subtitle_, theme.captionStyle(), LV_PART_MAIN);
-	lv_obj_set_style_text_font(subtitle_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(subtitle_, theme.typography().captionZoom, LV_PART_MAIN);
-	lv_label_set_text(subtitle_, "Device diagnostics and runtime status");
-	lv_obj_align(subtitle_, LV_ALIGN_TOP_LEFT, 0, 52);
+	lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
 
 	themeLabel_ = lv_label_create(root_);
 	lv_obj_add_style(themeLabel_, theme.captionStyle(), LV_PART_MAIN);
 	lv_label_set_text(themeLabel_, "Theme");
-	lv_obj_align(themeLabel_, LV_ALIGN_TOP_LEFT, 0, 82);
+	lv_obj_align(themeLabel_, LV_ALIGN_TOP_LEFT, 0, kSystemThemeLabelY);
 
 	themeDropdown_ = lv_dropdown_create(root_);
 	lv_obj_set_width(themeDropdown_, lv_pct(100));
-	lv_obj_align(themeDropdown_, LV_ALIGN_TOP_LEFT, 0, 108);
+	lv_obj_set_height(themeDropdown_, kSystemDropdownHeight);
+	lv_obj_align(themeDropdown_, LV_ALIGN_TOP_LEFT, 0, kSystemDropdownY);
 	lv_dropdown_set_options(themeDropdown_, themeOptions().c_str());
 	lv_obj_add_style(themeDropdown_, theme.cardAltStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.defaultLabelStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_font(themeDropdown_, &lv_font_montserrat_14, LV_PART_MAIN);
+	lv_obj_set_style_pad_top(themeDropdown_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_bottom(themeDropdown_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_left(themeDropdown_, 12, LV_PART_MAIN);
+	lv_obj_set_style_pad_right(themeDropdown_, 12, LV_PART_MAIN);
 	lv_obj_add_flag(themeDropdown_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
 	lv_obj_add_event_cb(themeDropdown_, onThemeDropdownChanged, LV_EVENT_VALUE_CHANGED, this);
 	syncThemeSelector();
 
 	list_ = lv_obj_create(root_);
-	lv_obj_set_size(list_, lv_pct(100), lv_pct(100));
-	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, 156);
+	lv_obj_set_width(list_, lv_pct(100));
+	lv_obj_set_height(list_, kSystemListHeight);
+	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, kSystemListY);
 	lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
-	lv_obj_set_style_pad_row(list_, theme.spacing().listRowGap, LV_PART_MAIN);
+	lv_obj_set_style_pad_row(list_, kSystemCardGap, LV_PART_MAIN);
 	lv_obj_set_flex_flow(list_, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_scroll_dir(list_, LV_DIR_VER);
-	lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLL_CHAIN_HOR | LV_OBJ_FLAG_GESTURE_BUBBLE);
+	lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLL_ONE | LV_OBJ_FLAG_SCROLL_MOMENTUM | LV_OBJ_FLAG_GESTURE_BUBBLE);
+	lv_obj_set_scroll_snap_y(list_, LV_SCROLL_SNAP_START);
+	lv_obj_set_scroll_snap_x(list_, LV_SCROLL_SNAP_NONE);
+	lv_obj_set_style_anim_time(list_, 180, LV_PART_MAIN);
 	lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_OFF);
 
 	for (size_t i = 0; i < 11; ++i) {
 		rowLabels_[i] = lv_label_create(list_);
 		lv_obj_set_width(rowLabels_[i], lv_pct(100));
+		lv_obj_set_height(rowLabels_[i], kSystemCardHeight);
+		lv_obj_add_flag(rowLabels_[i], LV_OBJ_FLAG_SNAPPABLE);
+		lv_obj_clear_flag(rowLabels_[i], LV_OBJ_FLAG_SCROLLABLE);
 		lv_obj_add_style(rowLabels_[i], theme.cardAltStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_color(rowLabels_[i], theme.palette().textPrimary, LV_PART_MAIN);
 		lv_obj_set_style_text_font(rowLabels_[i], &lv_font_montserrat_14, LV_PART_MAIN);
@@ -98,19 +111,26 @@ void SystemPage::applyTheme(ThemeManager& theme) {
 	lv_obj_add_style(root_, theme.cardStyle(), LV_PART_MAIN);
 	ui_make_container_transparent(root_);
 	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
-	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
-	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
-	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(title_, theme.typography().pageTitleZoom, LV_PART_MAIN);
-	lv_obj_add_style(subtitle_, theme.captionStyle(), LV_PART_MAIN);
+	lv_obj_set_style_pad_all(root_, kSystemPagePadding, LV_PART_MAIN);
 	lv_obj_add_style(themeLabel_, theme.captionStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.cardAltStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.defaultLabelStyle(), LV_PART_MAIN);
 	lv_obj_set_style_border_color(themeDropdown_, theme.palette().shadow, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(themeDropdown_, theme.palette().surfaceAlt, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(subtitle_, theme.typography().captionZoom, LV_PART_MAIN);
-	lv_obj_set_style_pad_row(list_, theme.spacing().listRowGap, LV_PART_MAIN);
+	lv_obj_set_style_pad_top(themeDropdown_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_bottom(themeDropdown_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_left(themeDropdown_, 12, LV_PART_MAIN);
+	lv_obj_set_style_pad_right(themeDropdown_, 12, LV_PART_MAIN);
+	lv_obj_align(themeLabel_, LV_ALIGN_TOP_LEFT, 0, kSystemThemeLabelY);
+	lv_obj_set_height(themeDropdown_, kSystemDropdownHeight);
+	lv_obj_align(themeDropdown_, LV_ALIGN_TOP_LEFT, 0, kSystemDropdownY);
+	lv_obj_set_height(list_, kSystemListHeight);
+	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, kSystemListY);
+	lv_obj_set_style_pad_row(list_, kSystemCardGap, LV_PART_MAIN);
 	for (size_t i = 0; i < 11; ++i) {
+		lv_obj_set_height(rowLabels_[i], kSystemCardHeight);
+		lv_obj_add_flag(rowLabels_[i], LV_OBJ_FLAG_SNAPPABLE);
+		lv_obj_clear_flag(rowLabels_[i], LV_OBJ_FLAG_SCROLLABLE);
 		lv_obj_add_style(rowLabels_[i], theme.cardAltStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_color(rowLabels_[i], theme.palette().textPrimary, LV_PART_MAIN);
 		lv_obj_set_style_text_font(rowLabels_[i], &lv_font_montserrat_14, LV_PART_MAIN);

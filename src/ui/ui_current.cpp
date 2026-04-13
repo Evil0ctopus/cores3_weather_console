@@ -27,7 +27,7 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	// Create PNG weather icon
 	iconObj_ = ui_icon_create(root_, IconId::ICON_CLEAR_DAY, theme.themeId());
 	if (iconObj_ != nullptr) {
-		ui_icon_set_size(iconObj_, 40, 40);
+		ui_icon_set_size(iconObj_, 48, 48);
 		lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
 		displayedIconId_ = IconId::ICON_CLEAR_DAY;
 		hasDisplayedIcon_ = true;
@@ -77,7 +77,7 @@ void CurrentPage::applyTheme(ThemeManager& theme) {
 	IconId id = ui_icon_from_condition_code(lastConditionCode_, lastIsDaylight_);
 	iconObj_ = ui_icon_create(root_, id, theme.themeId());
 	if (iconObj_ != nullptr) {
-		ui_icon_set_size(iconObj_, 40, 40);
+		ui_icon_set_size(iconObj_, 48, 48);
 		lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
 		displayedIconId_ = id;
 		hasDisplayedIcon_ = true;
@@ -141,7 +141,7 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 			}
 			iconObj_ = ui_icon_create(root_, IconId::ICON_CLEAR_DAY, theme_->themeId());
 			if (iconObj_ != nullptr) {
-				ui_icon_set_size(iconObj_, 40, 40);
+				ui_icon_set_size(iconObj_, 48, 48);
 				lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
 				displayedIconId_ = IconId::ICON_CLEAR_DAY;
 				hasDisplayedIcon_ = true;
@@ -161,7 +161,7 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 			}
 			iconObj_ = ui_icon_create(root_, id, theme_->themeId());
 			if (iconObj_ != nullptr) {
-				ui_icon_set_size(iconObj_, 40, 40);
+				ui_icon_set_size(iconObj_, 48, 48);
 				lv_obj_align(iconObj_, LV_ALIGN_TOP_RIGHT, 0, 0);
 				displayedIconId_ = id;
 				hasDisplayedIcon_ = true;

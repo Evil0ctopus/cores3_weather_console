@@ -17,6 +17,18 @@ void invalidateTree(lv_obj_t* object) {
 	}
 }
 
+void applyTileSurface(lv_obj_t* object, const ui::ThemeManager& theme) {
+	if (object == nullptr) {
+		return;
+	}
+	lv_obj_set_style_bg_opa(object, LV_OPA_30, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(object, theme.palette().surfaceAlt, LV_PART_MAIN);
+	lv_obj_set_style_border_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_outline_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_shadow_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_radius(object, 0, LV_PART_MAIN);
+}
+
 }  // namespace
 
 namespace ui {
@@ -43,7 +55,7 @@ void RootNavigator::begin(lv_obj_t* screen, app::SettingsStore& settingsStore) {
 	}
 	lv_obj_set_size(tileview_, lv_pct(100), lv_pct(100));
 	lv_obj_add_style(tileview_, theme_.tabStyle(), LV_PART_MAIN);
-	ui_make_transparent(tileview_);
+	applyTileSurface(tileview_, theme_);
 	lv_obj_set_style_border_width(tileview_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(tileview_, theme_.spacing().screenPadding, LV_PART_MAIN);
 	lv_obj_set_scroll_dir(tileview_, LV_DIR_HOR);
@@ -76,11 +88,11 @@ void RootNavigator::begin(lv_obj_t* screen, app::SettingsStore& settingsStore) {
 	lv_obj_add_style(radarTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(alertsTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(systemTile_, theme_.tabStyle(), LV_PART_MAIN);
-	ui_make_transparent(currentTile_);
-	ui_make_transparent(weeklyTile_);
-	ui_make_transparent(radarTile_);
-	ui_make_transparent(alertsTile_);
-	ui_make_transparent(systemTile_);
+	applyTileSurface(currentTile_, theme_);
+	applyTileSurface(weeklyTile_, theme_);
+	applyTileSurface(radarTile_, theme_);
+	applyTileSurface(alertsTile_, theme_);
+	applyTileSurface(systemTile_, theme_);
 	lv_obj_set_style_border_width(currentTile_, 0, LV_PART_MAIN);
 	lv_obj_set_style_border_width(weeklyTile_, 0, LV_PART_MAIN);
 	lv_obj_set_style_border_width(radarTile_, 0, LV_PART_MAIN);
@@ -120,18 +132,18 @@ void RootNavigator::setTheme(ThemeId themeId) {
 	ui_backgrounds_update_theme(screen_, themeId);
 	lv_obj_add_style(tileview_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_set_style_pad_all(tileview_, theme_.spacing().screenPadding, LV_PART_MAIN);
-	ui_make_transparent(tileview_);
+	applyTileSurface(tileview_, theme_);
 	lv_obj_set_style_border_width(tileview_, 0, LV_PART_MAIN);
 	lv_obj_add_style(currentTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(weeklyTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(radarTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(alertsTile_, theme_.tabStyle(), LV_PART_MAIN);
 	lv_obj_add_style(systemTile_, theme_.tabStyle(), LV_PART_MAIN);
-	ui_make_transparent(currentTile_);
-	ui_make_transparent(weeklyTile_);
-	ui_make_transparent(radarTile_);
-	ui_make_transparent(alertsTile_);
-	ui_make_transparent(systemTile_);
+	applyTileSurface(currentTile_, theme_);
+	applyTileSurface(weeklyTile_, theme_);
+	applyTileSurface(radarTile_, theme_);
+	applyTileSurface(alertsTile_, theme_);
+	applyTileSurface(systemTile_, theme_);
 	lv_obj_set_style_border_width(currentTile_, 0, LV_PART_MAIN);
 	lv_obj_set_style_border_width(weeklyTile_, 0, LV_PART_MAIN);
 	lv_obj_set_style_border_width(radarTile_, 0, LV_PART_MAIN);
@@ -219,6 +231,7 @@ bool RootNavigator::moveToAdjacentPage(int8_t delta, bool animated) {
 	}
 
 	lv_obj_set_tile_id(tileview_, target, 0, animated ? LV_ANIM_ON : LV_ANIM_OFF);
+	invalidateTree(screen_);
 	return true;
 }
 

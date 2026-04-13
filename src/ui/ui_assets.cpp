@@ -58,6 +58,21 @@ AssetLoadResult ui_asset_load_png(lv_obj_t* imgObj, const char* path) {
 			return result;
 		}
 
+		lv_img_header_t header;
+		memset(&header, 0, sizeof(header));
+		const lv_res_t infoResult = lv_img_decoder_get_info(path, &header);
+		if (infoResult != LV_RES_OK) {
+			Serial.printf("[LVGL] ERROR: decoder probe failed for path=%s\n", path);
+			if (attempt == 0) {
+				Serial.printf("[ASSET] Retry load once: path=%s\n", path);
+				continue;
+			}
+			result.error = "decode_probe_failed";
+			result.fallbackUsed = true;
+			Serial.println("[ASSET] Auto-recovery engaged");
+			return result;
+		}
+
 		lv_img_set_src(imgObj, path);
 		const void* src = lv_img_get_src(imgObj);
 		if (src != nullptr) {

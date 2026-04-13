@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
+#include "ui_assets.h"
 #include "ui_theme.h"
 
 namespace ui {
@@ -95,25 +96,149 @@ const char* ui_icon_get_path(IconId id) {
 }
 
 /**
- * @brief Create a simple colored circle as a fallback when PNG loading fails.
+ * @brief Create a simple LVGL shape part for fallback icons.
  */
-static lv_obj_t* create_fallback_circle(lv_obj_t* parent, lv_color_t color) {
+static lv_obj_t* make_icon_part(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, lv_color_t color, lv_coord_t radius = LV_RADIUS_CIRCLE) {
+	lv_obj_t* part = lv_obj_create(parent);
+	if (part == nullptr) {
+		return nullptr;
+	}
+	lv_obj_remove_style_all(part);
+	lv_obj_set_size(part, w, h);
+	lv_obj_set_style_bg_opa(part, LV_OPA_COVER, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(part, color, LV_PART_MAIN);
+	lv_obj_set_style_radius(part, radius, LV_PART_MAIN);
+	lv_obj_set_style_border_width(part, 0, LV_PART_MAIN);
+	lv_obj_clear_flag(part, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+	return part;
+}
+
+/**
+ * @brief Create a drawn vector-style fallback icon when PNG loading fails.
+ */
+static lv_obj_t* create_fallback_circle(lv_obj_t* parent, lv_color_t color, IconId id) {
 	if (parent == nullptr) {
 		return nullptr;
 	}
 
-	// Create a small circle using a rectangle object with border radius
 	lv_obj_t* fallback = lv_obj_create(parent);
 	if (fallback == nullptr) {
 		return nullptr;
 	}
 
-	lv_obj_set_size(fallback, 24, 24);
-	lv_obj_set_style_radius(fallback, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-	lv_obj_set_style_bg_opa(fallback, LV_OPA_COVER, LV_PART_MAIN);
-	lv_obj_set_style_bg_color(fallback, color, LV_PART_MAIN);
+	lv_obj_remove_style_all(fallback);
+	lv_obj_set_size(fallback, 48, 48);
+	lv_obj_set_style_bg_opa(fallback, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(fallback, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(fallback, 0, LV_PART_MAIN);
+	lv_obj_clear_flag(fallback, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+	const lv_color_t light = lv_color_mix(lv_color_white(), color, LV_OPA_40);
+	const lv_color_t dim = lv_color_mix(color, lv_color_black(), LV_OPA_20);
+	const lv_color_t warn = lv_color_hex(0xFFD166);
+
+	switch (id) {
+		case IconId::ICON_CLEAR_DAY: {
+			const lv_color_t sunCore = lv_color_hex(0xFFD54A);
+			lv_obj_t* core = make_icon_part(fallback, 24, 24, sunCore);
+			if (core != nullptr) lv_obj_align(core, LV_ALIGN_CENTER, 0, 0);
+
+			const lv_coord_t rayOffsets[8][2] = {
+				{0, -16}, {0, 16}, {-16, 0}, {16, 0},
+				{-11, -11}, {11, -11}, {-11, 11}, {11, 11}
+			};
+			for (int i = 0; i < 8; ++i) {
+				const bool diagonal = i >= 4;
+				lv_obj_t* ray = make_icon_part(
+					fallback,
+					diagonal ? 6 : ((i < 2) ? 4 : 14),
+					diagonal ? 6 : ((i < 2) ? 14 : 4),
+					color,
+					3);
+				if (ray != nullptr) {
+					lv_obj_align(ray, LV_ALIGN_CENTER, rayOffsets[i][0], rayOffsets[i][1]);
+				}
+			}
+			break;
+		}
+		case IconId::ICON_CLEAR_NIGHT: {
+			lv_obj_t* moon = make_icon_part(fallback, 22, 22, light);
+			if (moon != nullptr) lv_obj_align(moon, LV_ALIGN_CENTER, -2, 0);
+			lv_obj_t* cutout = make_icon_part(fallback, 20, 20, lv_color_hex(0x07111A));
+			if (cutout != nullptr) lv_obj_align(cutout, LV_ALIGN_CENTER, 6, -2);
+			break;
+		}
+		case IconId::ICON_PARTLY_CLOUDY: {
+			lv_obj_t* sun = make_icon_part(fallback, 14, 14, warn);
+			if (sun != nullptr) lv_obj_align(sun, LV_ALIGN_CENTER, -10, -10);
+			/* fall through */
+		}
+		case IconId::ICON_CLOUDY: {
+			lv_obj_t* p1 = make_icon_part(fallback, 14, 14, light);
+			lv_obj_t* p2 = make_icon_part(fallback, 16, 16, light);
+			lv_obj_t* p3 = make_icon_part(fallback, 13, 13, light);
+			lv_obj_t* base = make_icon_part(fallback, 28, 12, light, 6);
+			if (p1 != nullptr) lv_obj_align(p1, LV_ALIGN_CENTER, -10, 2);
+			if (p2 != nullptr) lv_obj_align(p2, LV_ALIGN_CENTER, 0, -2);
+			if (p3 != nullptr) lv_obj_align(p3, LV_ALIGN_CENTER, 10, 2);
+			if (base != nullptr) lv_obj_align(base, LV_ALIGN_CENTER, 0, 8);
+			break;
+		}
+		case IconId::ICON_RAIN: {
+			lv_obj_t* p1 = make_icon_part(fallback, 14, 14, light);
+			lv_obj_t* p2 = make_icon_part(fallback, 16, 16, light);
+			lv_obj_t* p3 = make_icon_part(fallback, 13, 13, light);
+			lv_obj_t* base = make_icon_part(fallback, 28, 12, light, 6);
+			if (p1 != nullptr) lv_obj_align(p1, LV_ALIGN_CENTER, -10, -4);
+			if (p2 != nullptr) lv_obj_align(p2, LV_ALIGN_CENTER, 0, -8);
+			if (p3 != nullptr) lv_obj_align(p3, LV_ALIGN_CENTER, 10, -4);
+			if (base != nullptr) lv_obj_align(base, LV_ALIGN_CENTER, 0, 2);
+			for (int i = 0; i < 3; ++i) {
+				lv_obj_t* drop = make_icon_part(fallback, 4, 10, color, 3);
+				if (drop != nullptr) lv_obj_align(drop, LV_ALIGN_CENTER, -8 + i * 8, 15);
+			}
+			break;
+		}
+		case IconId::ICON_STORM: {
+			lv_obj_t* cloud = make_icon_part(fallback, 28, 14, light, 7);
+			if (cloud != nullptr) lv_obj_align(cloud, LV_ALIGN_CENTER, 0, -4);
+			lv_obj_t* bolt1 = make_icon_part(fallback, 8, 4, warn, 1);
+			lv_obj_t* bolt2 = make_icon_part(fallback, 4, 10, warn, 1);
+			lv_obj_t* bolt3 = make_icon_part(fallback, 8, 4, warn, 1);
+			if (bolt1 != nullptr) lv_obj_align(bolt1, LV_ALIGN_CENTER, 2, 8);
+			if (bolt2 != nullptr) lv_obj_align(bolt2, LV_ALIGN_CENTER, -2, 14);
+			if (bolt3 != nullptr) lv_obj_align(bolt3, LV_ALIGN_CENTER, 4, 18);
+			break;
+		}
+		case IconId::ICON_SNOW: {
+			lv_obj_t* cloud = make_icon_part(fallback, 28, 14, light, 7);
+			if (cloud != nullptr) lv_obj_align(cloud, LV_ALIGN_CENTER, 0, -4);
+			for (int i = 0; i < 3; ++i) {
+				lv_obj_t* flake = make_icon_part(fallback, 6, 6, lv_color_white());
+				if (flake != nullptr) lv_obj_align(flake, LV_ALIGN_CENTER, -8 + i * 8, 14);
+			}
+			break;
+		}
+		case IconId::ICON_FOG: {
+			for (int i = 0; i < 3; ++i) {
+				lv_obj_t* band = make_icon_part(fallback, 30 - i * 4, 4, light, 2);
+				if (band != nullptr) lv_obj_align(band, LV_ALIGN_CENTER, 0, -8 + i * 8);
+			}
+			break;
+		}
+		case IconId::ICON_WIND: {
+			for (int i = 0; i < 3; ++i) {
+				lv_obj_t* streak = make_icon_part(fallback, 28 - i * 4, 4, dim, 2);
+				if (streak != nullptr) lv_obj_align(streak, LV_ALIGN_CENTER, 0, -8 + i * 8);
+			}
+			break;
+		}
+		default: {
+			lv_obj_t* dot = make_icon_part(fallback, 20, 20, color);
+			if (dot != nullptr) lv_obj_align(dot, LV_ALIGN_CENTER, 0, 0);
+			break;
+		}
+	}
 
 	return fallback;
 }
@@ -146,7 +271,7 @@ lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 	if (path == nullptr) {
 		Serial.printf("[ICON] ERROR: Unknown IconId %d\n", static_cast<int>(id));
 		Serial.println("[ASSET] Auto-recovery engaged");
-		return create_fallback_circle(parent, lv_color_hex(0xFF6B6B));
+		return create_fallback_circle(parent, lv_color_hex(0xFF6B6B), id);
 	}
 	Serial.printf("[ICON] Loading id=%d path=%s\n", static_cast<int>(id), path);
 
@@ -155,7 +280,7 @@ lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 		Serial.printf("[ICON] Failed to load icon id %d: SPIFFS unavailable\n", static_cast<int>(id));
 		Serial.println("[ASSET] Auto-recovery engaged");
 		const ThemeColors colors = get_theme_colors(theme);
-		return create_fallback_circle(parent, lv_color_hex(colors.accent_primary));
+		return create_fallback_circle(parent, lv_color_hex(colors.accent_primary), id);
 	}
 
 	// Check if file exists
@@ -170,7 +295,7 @@ lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 		}
 		Serial.println("[ASSET] Auto-recovery engaged");
 		const ThemeColors colors = get_theme_colors(theme);
-		return create_fallback_circle(parent, lv_color_hex(colors.accent_secondary));
+		return create_fallback_circle(parent, lv_color_hex(colors.accent_secondary), id);
 	}
 
 	// Create the image object
@@ -178,31 +303,18 @@ lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 	if (icon == nullptr) {
 		Serial.printf("[ICON] Failed to create lv_img object for icon id %d\n", static_cast<int>(id));
 		const ThemeColors colors = get_theme_colors(theme);
-		return create_fallback_circle(parent, lv_color_hex(colors.text_secondary));
+		return create_fallback_circle(parent, lv_color_hex(colors.text_secondary), id);
 	}
 
-	bool loaded = false;
-	for (int attempt = 0; attempt < 2; ++attempt) {
-		lv_img_set_src(icon, path);
-		const void* src = lv_img_get_src(icon);
-		if (src != nullptr) {
-			loaded = true;
-			break;
-		}
-		Serial.printf("[ICON] Decode failed id=%d path=%s attempt=%d\n",
-			static_cast<int>(id), path, attempt + 1);
-		if (attempt == 0) {
-			Serial.printf("[ICON] Retry id=%d path=%s\n", static_cast<int>(id), path);
-		}
-	}
-
-	if (!loaded) {
+	AssetLoadResult loadResult = ui_asset_load_png(icon, path);
+	if (!loadResult.success) {
 		Serial.printf("[ICON] Failed to load PNG image for icon id %d from path %s\n",
 			static_cast<int>(id), path);
 		Serial.println("[ASSET] Auto-recovery engaged");
+		ui_asset_log_status(loadResult);
 		lv_obj_del(icon);
 		const ThemeColors colors = get_theme_colors(theme);
-		return create_fallback_circle(parent, lv_color_hex(colors.text_secondary));
+		return create_fallback_circle(parent, lv_color_hex(colors.text_secondary), id);
 	}
 
 	const size_t idx = icon_index(id);

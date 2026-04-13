@@ -155,7 +155,7 @@ void WeeklyPage::update(const WeatherData& data) {
 				}
 				rowIcons_[i] = ui_icon_create(rowCards_[i], id, theme_->themeId());
 				if (rowIcons_[i] != nullptr) {
-					ui_icon_set_size(rowIcons_[i], 34, 34);
+					ui_icon_set_size(rowIcons_[i], 40, 40);
 					rowIconIds_[i] = id;
 					rowIconSet_[i] = true;
 				}
