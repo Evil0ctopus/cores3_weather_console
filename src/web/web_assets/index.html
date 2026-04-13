@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Core Weather Control</title>
+    <link rel="stylesheet" href="/web_assets/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero glass">
+        <div>
+          <p class="eyebrow">Core Weather Console</p>
+          <h1>Device Settings</h1>
+          <p class="hero-copy">Tune location, weather cadence, theme, and radar behavior. The panel previews draft changes instantly and syncs applied settings back into NVS and the running firmware.</p>
+        </div>
+        <div class="hero-status">
+          <span class="pill" id="syncPill">Live Sync</span>
+          <span class="pill" id="deviceThemePill">Theme</span>
+          <span class="pill" id="wifiPill">WiFi</span>
+          <span class="pill" id="timePill">Time</span>
+        </div>
+      </section>
+
+      <section class="layout">
+        <form id="settingsForm" class="panel glass">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h2>Preferences</h2>
+            </div>
+            <button class="save-button" type="submit">Save Settings</button>
+          </div>
+
+          <div class="callout" id="syncCallout">
+            <strong>Realtime firmware sync</strong>
+            <span>Theme, units, radar mode, and cadence apply as soon as they change. Location and API key sync when you leave the field or press Save.</span>
+          </div>
+
+          <section class="wifi-setup">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">WiFi Setup</p>
+                <h3>Network</h3>
+              </div>
+              <div class="wifi-actions">
+                <button id="wifiScanButton" type="button" class="secondary-button">Scan</button>
+                <button id="wifiConnectButton" type="button" class="save-button">Connect</button>
+              </div>
+            </div>
+
+            <div class="grid two-up">
+              <label class="field">
+                <span>SSID</span>
+                <select id="wifiSsid" name="wifiSsid">
+                  <option value="">Scan for networks</option>
+                </select>
+                <div class="wifi-network-list" id="wifiNetworkList" aria-live="polite">
+                  <p class="wifi-network-empty">Tap Scan to find nearby WiFi networks.</p>
+                </div>
+              </label>
+
+              <label class="field">
+                <span>Password</span>
+                <input id="wifiPassword" name="wifiPassword" type="password" placeholder="WiFi password">
+                <small>Leave blank to reuse the stored password for the selected network.</small>
+              </label>
+            </div>
+
+            <label class="field checkbox-field">
+              <span>Auto Connect</span>
+              <input id="wifiAutoConnect" name="wifiAutoConnect" type="checkbox">
+              <small>Reconnect automatically after reboot or network loss.</small>
+            </label>
+
+            <div class="wifi-status-card">
+              <div>
+                <span class="meta-label">Status</span>
+                <strong id="wifiStatusText">Unknown</strong>
+              </div>
+              <div>
+                <span class="meta-label">Connected SSID</span>
+                <strong id="wifiStatusSsid">None</strong>
+              </div>
+              <div>
+                <span class="meta-label">IP Address</span>
+                <strong id="wifiStatusIp">Unavailable</strong>
+              </div>
+              <div>
+                <span class="meta-label">Signal</span>
+                <strong id="wifiStatusRssi">n/a</strong>
+              </div>
+            </div>
+
+            <p class="message" id="wifiMessage" aria-live="polite"></p>
+          </section>
+
+          <label class="field">
+            <span>Manual Location</span>
+            <input id="locationQuery" name="locationQuery" type="text" placeholder="City, State or ZIP Code">
+            <small>Enter city/state or ZIP code. The device resolves the provider location key when you save.</small>
+          </label>
+
+          <label class="field">
+            <span>API Key</span>
+            <input id="apiKey" name="apiKey" type="password" placeholder="AccuWeather API key">
+            <small>Optional. Leave blank to use automatic no-key weather (Open-Meteo), or enter AccuWeather key for full provider data.</small>
+          </label>
+
+          <div class="grid two-up">
+            <label class="field">
+              <span>Units</span>
+              <select id="units" name="units">
+                <option value="metric">Metric</option>
+                <option value="imperial">Imperial</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Theme</span>
+              <select id="theme" name="theme">
+                <option value="device">Match Device</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="future1">Future Theme</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid two-up">
+            <label class="field">
+              <span>Radar Mode</span>
+              <select id="radarMode" name="radarMode">
+                <option value="base">Base Reflectivity</option>
+                <option value="composite">Composite Reflectivity</option>
+                <option value="echotop">Echo Top</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Update Interval</span>
+              <input id="updateIntervalMinutes" name="updateIntervalMinutes" type="number" min="1" max="60" step="1">
+              <small>Minutes between weather refresh cycles.</small>
+            </label>
+          </div>
+
+          <div class="grid two-up">
+            <label class="field checkbox-field">
+              <span>Auto Contrast</span>
+              <input id="radarAutoContrast" name="radarAutoContrast" type="checkbox">
+              <small>Normalize radar intensity per frame after decode.</small>
+            </label>
+
+            <label class="field checkbox-field">
+              <span>Frame Interpolation</span>
+              <input id="radarInterpolation" name="radarInterpolation" type="checkbox">
+              <small>Blend between frames for smoother animation.</small>
+            </label>
+          </div>
+
+          <div class="grid two-up">
+            <label class="field checkbox-field">
+              <span>Storm Overlays</span>
+              <input id="radarStormOverlays" name="radarStormOverlays" type="checkbox">
+              <small>Show storm-cell rings from detected radar intensity peaks.</small>
+            </label>
+
+            <label class="field">
+              <span>Interpolation Steps</span>
+              <input id="radarInterpolationSteps" name="radarInterpolationSteps" type="number" min="0" max="3" step="1">
+              <small>Intermediate blended frames between source frames.</small>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Smoothing Passes</span>
+            <input id="radarSmoothingPasses" name="radarSmoothingPasses" type="number" min="0" max="3" step="1">
+            <small>Small blur passes to reduce frame noise and flicker.</small>
+          </label>
+
+          <label class="field checkbox-field">
+            <span>Debug Mode</span>
+            <input id="debugMode" name="debugMode" type="checkbox">
+            <small>Enable serial traces, on-screen overlay, and the web debug console.</small>
+          </label>
+
+          <div class="meta-row">
+            <div>
+              <span class="meta-label">Resolved Location</span>
+              <strong id="resolvedLocation">Not configured</strong>
+            </div>
+            <div>
+              <span class="meta-label">Provider Key</span>
+              <strong id="locationKey">None</strong>
+            </div>
+          </div>
+
+          <p class="message" id="formMessage" aria-live="polite"></p>
+        </form>
+
+        <aside class="panel glass preview-panel" id="previewPanel">
+          <div class="panel-head preview-head">
+            <div>
+              <p class="eyebrow">Live Preview</p>
+              <h2 id="previewTitle">Waiting for weather</h2>
+              <p class="preview-subtitle" id="previewSubtitle">Draft changes update the web preview immediately.</p>
+            </div>
+            <span class="preview-temp" id="previewTemp">--</span>
+          </div>
+
+          <div class="preview-card" id="previewCard">
+            <div class="preview-sky"></div>
+            <div class="preview-content">
+              <p class="preview-location" id="previewLocation">Unknown location</p>
+              <p class="preview-summary" id="previewSummary">Weather data has not arrived yet.</p>
+              <div class="preview-chips">
+                <span class="pill" id="previewUnits">Units</span>
+                <span class="pill" id="previewRadar">Radar</span>
+                <span class="pill" id="previewInterval">Interval</span>
+                <span class="pill" id="previewRadarFx">Effects</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="meta-label">Applied Theme</span>
+              <strong id="previewTheme">Dark</strong>
+            </div>
+            <div class="stat-card">
+              <span class="meta-label">Radar Download</span>
+              <strong id="previewDownload">Idle</strong>
+            </div>
+            <div class="stat-card">
+              <span class="meta-label">Alerts</span>
+              <strong id="previewWarning">Clear</strong>
+            </div>
+            <div class="stat-card">
+              <span class="meta-label">Connectivity</span>
+              <strong id="previewConnectivity">Waiting</strong>
+            </div>
+            <div class="stat-card">
+              <span class="meta-label">BLE</span>
+              <strong id="previewBle">Idle</strong>
+            </div>
+          </div>
+
+          <div class="alert-list" id="alertsList"></div>
+
+          <div class="debug-console" id="debugConsolePanel">
+            <div class="debug-console-head">
+              <span class="meta-label">Debug Console</span>
+              <div class="debug-console-actions">
+                <strong id="debugStatus">Disabled</strong>
+                <button id="exportDebugLogs" type="button" class="debug-export-btn">Export Logs</button>
+                <button id="clearDebugLogs" type="button" class="debug-clear-btn">Clear Logs</button>
+              </div>
+            </div>
+            <pre id="debugConsoleOutput">Debug mode is disabled.</pre>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="/web_assets/app.js" defer></script>
+  </body>
+  </html>

@@ -1,0 +1,47 @@
+{
+  "name": "light",
+  "colors": {
+    "bg": "#EEF2F6",
+    "surface": "#FFFFFF",
+    "surfaceAlt": "#F6F8FB",
+    "textPrimary": "#111827",
+    "textSecondary": "#64748B",
+    "accent": "#1E88FF",
+    "shadow": "#A5B4C7",
+    "warning": "#E45B58"
+  },
+  "typography": {
+    "sectionLetterSpace": 1,
+    "titleLineSpace": 4,
+    "bodyLineSpace": 6,
+    "summaryLineSpace": 10,
+    "pageTitleZoom": 190,
+    "captionZoom": 128,
+    "heroValueZoom": 300,
+    "heroSummaryZoom": 170,
+    "weeklyRowZoom": 125,
+    "alertRowZoom": 122,
+    "bootTitleZoom": 175
+  },
+  "spacing": {
+    "screenPadding": 12,
+    "cardPadding": 20,
+    "currentCardPadding": 22,
+    "cardAltPadding": 16,
+    "cardRadius": 24,
+    "cardAltRadius": 18,
+    "listRowGap": 12,
+    "weeklyListTop": 56,
+    "alertsListTop": 82,
+    "imageRadius": 18,
+    "chipPadX": 12,
+    "chipPadY": 6,
+    "iconChipPadX": 14,
+    "iconChipPadY": 8
+  },
+  "accent": {
+    "chipText": "#FFFFFF",
+    "iconTint": "#1E88FF",
+    "iconMutedTint": "#64748B"
+  }
+}

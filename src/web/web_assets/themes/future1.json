@@ -1,0 +1,47 @@
+{
+  "name": "future1",
+  "colors": {
+    "bg": "#0E1419",
+    "surface": "#152129",
+    "surfaceAlt": "#20313B",
+    "textPrimary": "#F3F8FA",
+    "textSecondary": "#97AFB8",
+    "accent": "#5ED6C5",
+    "shadow": "#04090C",
+    "warning": "#FF8D6E"
+  },
+  "typography": {
+    "sectionLetterSpace": 2,
+    "titleLineSpace": 4,
+    "bodyLineSpace": 7,
+    "summaryLineSpace": 11,
+    "pageTitleZoom": 198,
+    "captionZoom": 128,
+    "heroValueZoom": 306,
+    "heroSummaryZoom": 172,
+    "weeklyRowZoom": 126,
+    "alertRowZoom": 124,
+    "bootTitleZoom": 182
+  },
+  "spacing": {
+    "screenPadding": 12,
+    "cardPadding": 20,
+    "currentCardPadding": 22,
+    "cardAltPadding": 16,
+    "cardRadius": 24,
+    "cardAltRadius": 18,
+    "listRowGap": 12,
+    "weeklyListTop": 56,
+    "alertsListTop": 82,
+    "imageRadius": 18,
+    "chipPadX": 12,
+    "chipPadY": 6,
+    "iconChipPadX": 14,
+    "iconChipPadY": 8
+  },
+  "accent": {
+    "chipText": "#0E1419",
+    "iconTint": "#5ED6C5",
+    "iconMutedTint": "#97AFB8"
+  }
+}
