@@ -9,6 +9,11 @@
 namespace ui {
 
 struct SystemInfo {
+	bool wifiConnected = false;
+	uint8_t wifiSignalBars = 0;
+	int batteryPct = 0;
+	bool batteryCharging = false;
+	String currentTime;
 	String ipAddress;
 	String webUiUrl;
 	String wifiSsid;

@@ -4,6 +4,10 @@
 #include <math.h>
 #include <time.h>
 
+#include <Adafruit_NeoPixel.h>
+#include <memory>
+#include <utility/led/LED_Strip_Class.hpp>
+
 #include "led_patterns.h"
 
 namespace led {
@@ -11,6 +15,112 @@ namespace led {
 namespace {
 
 const uint32_t kFrameIntervalMs = 20;
+// Official Base M5GO Bottom3 (SKU A014-D) pin map:
+// the M-Bus RGB signal for the 10 WS2812 LEDs is wired to CoreS3 GPIO5 (G5).
+static constexpr int8_t kBottom3LedPin = 5;
+static constexpr size_t kBottom3LedCount = 10;
+
+void LogLed(const String& message) {
+	Serial.println("[LED] " + message);
+}
+
+std::unique_ptr<Adafruit_NeoPixel> gBottom3NeoPixel;
+
+bool IsCoreS3Board() {
+	switch (M5.getBoard()) {
+		case m5::board_t::board_M5StackCoreS3:
+		case m5::board_t::board_M5StackCoreS3SE:
+			return true;
+		default:
+			return false;
+	}
+}
+
+void ForceCoreS3BusPower(bool enable) {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	if (!IsCoreS3Board()) {
+		return;
+	}
+	static constexpr uint8_t kAw9523Address = 0x58;
+	static constexpr uint8_t kPort0Register = 0x02;
+	static constexpr uint8_t kBusEnableMask = 0x02;
+	static constexpr uint8_t kBoostEnableMask = 0x80;
+	uint8_t regs[2] = {0, 0};
+	if (M5.In_I2C.readRegister(kAw9523Address, kPort0Register, regs, sizeof(regs), 100000)) {
+		if (enable) {
+			regs[0] |= kBusEnableMask;
+			regs[1] |= kBoostEnableMask;
+		} else {
+			regs[0] &= ~kBusEnableMask;
+			if ((regs[0] & kBusEnableMask) == 0) {
+				regs[1] &= ~kBoostEnableMask;
+			}
+		}
+		const bool writeOk = M5.In_I2C.writeRegister(kAw9523Address, kPort0Register, regs, sizeof(regs), 100000);
+		if (!writeOk) {
+			LogLed("busPower: AW9523 write failed");
+		}
+	} else {
+		LogLed("busPower: AW9523 read failed");
+	}
+#else
+	(void)enable;
+#endif
+}
+
+void SetIndicatorLed(uint8_t brightness) {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	if (IsCoreS3Board()) {
+		// Keep the CoreS3 board indicator LED off; the Bottom3 strip is the only visible LED target.
+		M5.Power.Axp2101.writeRegister8(0x69, brightness == 0 ? 0x05 : 0x35);
+	}
+#else
+	(void)brightness;
+#endif
+}
+
+bool AddStripOnPin(std::vector<std::shared_ptr<m5::LED_Strip_Class>>& strips, int8_t pin, size_t count, uint8_t brightness) {
+	LogLed("addStripOnPin: pin=" + String(pin) + " ledCount=" + String(static_cast<unsigned>(count)) +
+		" brightness=" + String(static_cast<unsigned>(brightness)));
+
+	gBottom3NeoPixel.reset();
+
+	auto bus = std::make_shared<m5::LedBus_RMT>();
+	auto busCfg = bus->getConfig();
+	busCfg.pin_data = pin;
+	bus->setConfig(busCfg);
+
+	auto strip = std::make_shared<m5::LED_Strip_Class>();
+	auto stripCfg = strip->getConfig();
+	stripCfg.led_count = count;
+	stripCfg.byte_per_led = 3;
+	stripCfg.color_order = m5::LED_Strip_Class::config_t::color_order_grb;
+	strip->setBus(bus);
+	strip->setConfig(stripCfg);
+
+	const bool beginOk = strip->begin();
+	LogLed("addStripOnPin: pin=" + String(pin) + " strip->begin()=" + String(beginOk ? "true" : "false"));
+	if (beginOk) {
+		strip->setBrightness(brightness);
+		strips.push_back(strip);
+		return true;
+	}
+
+	if (pin == kBottom3LedPin) {
+		LogLed("addStripOnPin: M5Unified RMT init failed on GPIO5, enabling NeoPixel fallback");
+		gBottom3NeoPixel.reset(new Adafruit_NeoPixel(static_cast<uint16_t>(count), pin, NEO_GRB + NEO_KHZ800));
+		if (gBottom3NeoPixel) {
+			gBottom3NeoPixel->begin();
+			gBottom3NeoPixel->setBrightness(brightness);
+			gBottom3NeoPixel->clear();
+			gBottom3NeoPixel->show();
+			LogLed("addStripOnPin: NeoPixel fallback armed on GPIO5");
+			return true;
+		}
+	}
+
+	return false;
+}
 
 bool SummaryContains(const String& summary, const char* token) {
 	String haystack = summary;
@@ -22,33 +132,56 @@ bool SummaryContains(const String& summary, const char* token) {
 
 }  // namespace
 
+bool LedEngine::initializeHardware() {
+	lastInitAttemptMs_ = millis();
+	ready_ = false;
+	usingPowerIndicator_ = false;
+	usingM5Led_ = false;
+	usingExternalStrips_ = false;
+	ledCount_ = 0;
+	lastPowerIndicatorLevel_ = 0;
+	forceNextPush_ = true;
+	externalStrips_.clear();
+	gBottom3NeoPixel.reset();
+
+	LogLed("initializeHardware: begin brightness=" + String(static_cast<unsigned>(brightness_)));
+
+	if (!IsCoreS3Board()) {
+		LogLed("initializeHardware: unsupported board, Bottom3 path requires CoreS3");
+		SetIndicatorLed(0);
+		emitEvent("led-init", "mode=unsupported-board");
+		return false;
+	}
+
+	M5.Power.setExtOutput(true);
+	ForceCoreS3BusPower(true);
+	SetIndicatorLed(0);
+
+	usingExternalStrips_ = AddStripOnPin(externalStrips_, kBottom3LedPin, kBottom3LedCount, brightness_);
+	ledCount_ = usingExternalStrips_ ? kBottom3LedCount : 0;
+	ready_ = usingExternalStrips_;
+
+	LogLed("initializeHardware: pin=" + String(kBottom3LedPin) +
+		" ledCount=" + String(static_cast<unsigned>(ledCount_)) +
+		" ready=" + String(ready_ ? "true" : "false") +
+		" usingExternalStrips=" + String(usingExternalStrips_ ? "true" : "false"));
+
+	if (!ready_) {
+		LogLed("initializeHardware: Bottom3 strip init failed on GPIO5");
+	}
+
+		emitEvent("led-init", "mode=" + String(ready_ ? "bottom3-gpio" : "bottom3-gpio-failed") +
+			" count=" + String(static_cast<unsigned>(ledCount_)) +
+			" pin=" + String(kBottom3LedPin) +
+			" brightness=" + String(static_cast<unsigned>(brightness_)));
+	return ready_;
+}
+
 void LedEngine::begin(uint8_t brightness) {
 	brightness_ = brightness;
 	initialized_ = true;
-	lastInitAttemptMs_ = millis();
-	const bool beginOk = M5.Led.begin();
-	const bool enabled = M5.Led.isEnabled();
-	const size_t reportedCount = M5.Led.getCount();
-	ready_ = beginOk || enabled || (reportedCount > 0);
-	if (!ready_) {
-		ready_ = true;
-	}
-	ledCount_ = reportedCount;
-	if (ledCount_ == 0) {
-		ledCount_ = kMaxLeds;
-	}
-	if (ledCount_ > kMaxLeds) {
-		ledCount_ = kMaxLeds;
-	}
-
-	M5.Led.setAutoDisplay(false);
-	if (ready_) {
-		M5.Led.setBrightness(brightness_);
-	}
-	emitEvent("led-init", "ready=" + String(ready_ ? "true" : "false") +
-		" begin=" + String(beginOk ? "true" : "false") +
-		" enabled=" + String(enabled ? "true" : "false") +
-		" count=" + String(static_cast<unsigned>(ledCount_)));
+	LogLed("begin: brightness=" + String(static_cast<unsigned>(brightness_)));
+	initializeHardware();
 
 	mood_.primary = patterns::color(24, 48, 96);
 	mood_.secondary = patterns::color(6, 14, 28);
@@ -97,7 +230,67 @@ void LedEngine::begin(uint8_t brightness) {
 	for (size_t i = 0; i < kMaxLeds; ++i) {
 		lastPushed_[i] = RGBColor();
 	}
+
+	forceNextPush_ = true;
 	pushToHardware();
+}
+
+void LedEngine::selfTestBottom3() {
+	LogLed("selfTestBottom3: start");
+	if (IsCoreS3Board()) {
+		SetIndicatorLed(0);
+	}
+
+	if (!initialized_) {
+		begin(brightness_);
+	}
+	if (!ready_ || !usingExternalStrips_) {
+		if (!initializeHardware()) {
+			LogLed("selfTestBottom3: initializeHardware failed");
+			return;
+		}
+	}
+
+	const uint8_t savedBrightness = brightness_;
+	uint8_t testBrightness = savedBrightness;
+	if (testBrightness < 128U) {
+		testBrightness = 128U;
+	}
+	if (testBrightness > 192U) {
+		testBrightness = 192U;
+	}
+	LogLed("selfTestBottom3: entry brightness=" + String(static_cast<unsigned>(savedBrightness)) +
+		" testBrightness=" + String(static_cast<unsigned>(testBrightness)));
+	brightness_ = testBrightness;
+
+	auto showSolid = [&](const RGBColor& color, uint32_t dwellMs) {
+		clearFrame(color);
+		forceNextPush_ = true;
+		pushToHardware();
+		delay(dwellMs);
+	};
+
+	showSolid(patterns::color(255, 0, 0), 160);
+	showSolid(patterns::color(0, 255, 0), 160);
+	showSolid(patterns::color(0, 0, 255), 160);
+
+	for (size_t step = 0; step < kBottom3LedCount; ++step) {
+		clearFrame();
+		frame_[step] = patterns::color(255, 200, 40);
+		if (step > 0) {
+			frame_[step - 1] = patterns::color(40, 90, 255);
+		}
+		forceNextPush_ = true;
+		pushToHardware();
+		delay(45);
+	}
+
+	brightness_ = savedBrightness;
+	clearFrame();
+	forceNextPush_ = true;
+	lastRenderMs_ = 0;
+	pushToHardware();
+	LogLed("selfTestBottom3: complete, restored runtime brightness=" + String(static_cast<unsigned>(brightness_)));
 }
 
 void LedEngine::update() {
@@ -108,34 +301,14 @@ void LedEngine::update() {
 	if (!ready_ || ledCount_ == 0) {
 		const uint32_t nowMs = millis();
 		if ((nowMs - lastInitAttemptMs_) >= 1500U) {
-			lastInitAttemptMs_ = nowMs;
-			const bool beginOk = M5.Led.begin();
-			const bool enabled = M5.Led.isEnabled();
-			const size_t reportedCount = M5.Led.getCount();
-			ready_ = beginOk || enabled || (reportedCount > 0);
-			if (!ready_) {
-				ready_ = true;
-			}
-			ledCount_ = reportedCount;
-			if (ledCount_ == 0) {
-				ledCount_ = kMaxLeds;
-			}
-			if (ledCount_ > kMaxLeds) {
-				ledCount_ = kMaxLeds;
-			}
-			if (ready_ && ledCount_ > 0) {
-				M5.Led.setAutoDisplay(false);
-				M5.Led.setBrightness(brightness_);
+			if (initializeHardware()) {
 				clearFrame();
 				for (size_t i = 0; i < kMaxLeds; ++i) {
 					lastPushed_[i] = RGBColor();
 				}
+				lastPowerIndicatorLevel_ = 0;
 				pushToHardware();
-				emitEvent("led-ready", "reinitialized");
-			} else {
-				emitEvent("led-retry", "ready=false begin=" + String(beginOk ? "true" : "false") +
-					" enabled=" + String(enabled ? "true" : "false") +
-					" count=" + String(static_cast<unsigned>(reportedCount)));
+				emitEvent("led-ready", usingExternalStrips_ ? "bottom3-gpio" : "offline");
 			}
 		}
 	}
@@ -256,45 +429,46 @@ void LedEngine::setEventCallback(LedEventCallback callback, void* userContext) {
 }
 
 String LedEngine::statusLabel() const {
+	String suffix = usingExternalStrips_ ? " / Bottom3 GPIO5" : " / LED Offline";
 	if (boot_.active) {
-		return "Boot";
+		return "Boot" + suffix;
 	}
 	if (alert_.active && alert_.level == AlertLevel::Critical) {
-		return "Critical Alert";
+		return "Critical Alert" + suffix;
 	}
 	if (alert_.active) {
-		return "Alert";
+		return "Alert" + suffix;
 	}
 	if (progress_.active) {
-		return "Progress";
+		return "Progress" + suffix;
 	}
 	if (transition_.active) {
-		return "Page Sweep";
+		return "Page Sweep" + suffix;
 	}
 	if (touch_.active) {
-		return "Touch Response";
+		return "Touch Response" + suffix;
 	}
 	if (!idle_.active) {
-		return "Off";
+		return "Off" + suffix;
 	}
 
 	const IdleMode mode = resolveIdleMode(millis());
 	switch (mode) {
 		case IdleMode::CyanBreathing:
-			return "Cyan Breathing";
+			return "Cyan Breathing" + suffix;
 		case IdleMode::Breathing:
-			return "Breathing";
+			return "Breathing" + suffix;
 		case IdleMode::Sunrise:
-			return "Sunrise";
+			return "Sunrise" + suffix;
 		case IdleMode::Sunset:
-			return "Sunset";
+			return "Sunset" + suffix;
 		case IdleMode::WeatherGlow:
-			return "Weather Glow";
+			return "Weather Glow" + suffix;
 		case IdleMode::Off:
-			return "Off";
+			return "Off" + suffix;
 		case IdleMode::Auto:
 		default:
-			return "Auto";
+			return "Auto" + suffix;
 	}
 }
 
@@ -413,21 +587,91 @@ void LedEngine::emitEvent(const char* eventName, const String& details) const {
 	eventCallback_(eventUserContext_, eventName, details);
 }
 
+uint8_t LedEngine::computePowerIndicatorLevel() const {
+	if (ledCount_ == 0) {
+		return 0;
+	}
+
+	uint32_t total = 0;
+	for (size_t i = 0; i < ledCount_; ++i) {
+		uint8_t intensity = frame_[i].r;
+		if (frame_[i].g > intensity) {
+			intensity = frame_[i].g;
+		}
+		if (frame_[i].b > intensity) {
+			intensity = frame_[i].b;
+		}
+		total += intensity;
+	}
+
+	uint32_t level = total / ledCount_;
+	level = (level * brightness_) / 255U;
+	if (level > 0U && level < 12U) {
+		level = 12U;
+	}
+	if (level > 255U) {
+		level = 255U;
+	}
+	return static_cast<uint8_t>(level);
+}
+
 void LedEngine::pushToHardware() {
-	if (!ready_ || ledCount_ == 0) {
+	const bool hasPixelFallback = static_cast<bool>(gBottom3NeoPixel);
+	const bool hasStripOutput = !externalStrips_.empty() || hasPixelFallback;
+
+	if ((!ready_ || ledCount_ == 0 || !usingExternalStrips_ || !hasStripOutput) && IsCoreS3Board()) {
+		if (!initializeHardware()) {
+			return;
+		}
+	}
+
+	if (!ready_ || ledCount_ == 0 || !usingExternalStrips_ || !hasStripOutput) {
 		return;
 	}
 
-	M5.Led.setBrightness(brightness_);
-	for (size_t i = 0; i < ledCount_; ++i) {
-		if (frame_[i].r == lastPushed_[i].r && frame_[i].g == lastPushed_[i].g && frame_[i].b == lastPushed_[i].b) {
-			continue;
+	bool changed = forceNextPush_;
+	for (size_t i = 0; i < ledCount_ && i < kMaxLeds; ++i) {
+		if (frame_[i].r != lastPushed_[i].r || frame_[i].g != lastPushed_[i].g || frame_[i].b != lastPushed_[i].b) {
+			changed = true;
+			break;
 		}
+	}
 
-		M5.Led.setColor(i, frame_[i]);
+	static uint32_t lastPowerEnsureMs = 0;
+	const uint32_t nowMs = millis();
+	if (forceNextPush_ || (nowMs - lastPowerEnsureMs) >= 2000U) {
+		M5.Power.setExtOutput(true);
+		ForceCoreS3BusPower(true);
+		lastPowerEnsureMs = nowMs;
+	}
+	SetIndicatorLed(0);
+
+	if (!changed) {
+		return;
+	}
+
+	if (gBottom3NeoPixel) {
+		gBottom3NeoPixel->setBrightness(brightness_);
+		for (size_t i = 0; i < ledCount_ && i < kMaxLeds; ++i) {
+			gBottom3NeoPixel->setPixelColor(static_cast<uint16_t>(i), frame_[i].r, frame_[i].g, frame_[i].b);
+		}
+		gBottom3NeoPixel->show();
+	} else {
+		for (size_t stripIndex = 0; stripIndex < externalStrips_.size(); ++stripIndex) {
+			auto& strip = externalStrips_[stripIndex];
+			if (!strip) {
+				continue;
+			}
+			strip->setBrightness(brightness_);
+			strip->setColors(frame_, 0, ledCount_);
+			strip->display();
+		}
+	}
+
+	for (size_t i = 0; i < kMaxLeds; ++i) {
 		lastPushed_[i] = frame_[i];
 	}
-	M5.Led.display();
+	forceNextPush_ = false;
 }
 
 LedEngine::MoodPalette LedEngine::chooseMoodPalette(const WeatherData& data) const {

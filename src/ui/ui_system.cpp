@@ -4,11 +4,12 @@ namespace ui {
 namespace {
 
 constexpr lv_coord_t kSystemPagePadding = 8;
-constexpr lv_coord_t kSystemThemeLabelY = 4;
-constexpr lv_coord_t kSystemDropdownY = 22;
+constexpr lv_coord_t kSystemTitleY = 0;
+constexpr lv_coord_t kSystemThemeLabelY = 18;
+constexpr lv_coord_t kSystemDropdownY = 36;
 constexpr lv_coord_t kSystemDropdownHeight = 38;
-constexpr lv_coord_t kSystemListY = 68;
-constexpr lv_coord_t kSystemListHeight = 160;
+constexpr lv_coord_t kSystemListY = 82;
+constexpr lv_coord_t kSystemListHeight = 146;
 constexpr lv_coord_t kSystemCardHeight = 116;
 constexpr lv_coord_t kSystemCardGap = 8;
 
@@ -48,7 +49,20 @@ void SystemPage::begin(lv_obj_t* parent,
 	lv_obj_set_style_pad_all(root_, kSystemPagePadding, LV_PART_MAIN);
 
 	title_ = lv_label_create(root_);
-	lv_obj_add_flag(title_, LV_OBJ_FLAG_HIDDEN);
+	lv_obj_add_style(title_, theme.titleStyle(), LV_PART_MAIN);
+	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
+	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(title_, 115, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(title_, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(title_, theme.palette().surfaceAlt, LV_PART_MAIN);
+	lv_obj_set_style_radius(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_left(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_right(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_top(title_, 3, LV_PART_MAIN);
+	lv_obj_set_style_pad_bottom(title_, 3, LV_PART_MAIN);
+	lv_label_set_text(title_, "System");
+	lv_obj_align(title_, LV_ALIGN_TOP_LEFT, 0, kSystemTitleY);
+	lv_obj_move_foreground(title_);
 
 	subtitle_ = lv_label_create(root_);
 	lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
@@ -112,6 +126,9 @@ void SystemPage::applyTheme(ThemeManager& theme) {
 	ui_make_container_transparent(root_);
 	lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(root_, kSystemPagePadding, LV_PART_MAIN);
+	lv_obj_add_style(title_, theme.titleStyle(), LV_PART_MAIN);
+	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(title_, 115, LV_PART_MAIN);
 	lv_obj_add_style(themeLabel_, theme.captionStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.cardAltStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.defaultLabelStyle(), LV_PART_MAIN);

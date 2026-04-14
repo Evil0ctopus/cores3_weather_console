@@ -260,10 +260,22 @@ static bool ensure_spiffs_ready() {
 	return false;
 }
 
+static bool use_custom_vector_icon(IconId id) {
+	return id == IconId::ICON_CLEAR_DAY || id == IconId::ICON_PARTLY_CLOUDY;
+}
+
 lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 	if (parent == nullptr) {
 		Serial.println("[ICON] ERROR: ui_icon_create parent is null.");
 		return nullptr;
+	}
+
+	if (use_custom_vector_icon(id)) {
+		const lv_color_t vectorColor = (id == IconId::ICON_CLEAR_DAY)
+			? lv_color_hex(0xF7B500)
+			: lv_color_hex(0xB7C8D9);
+		Serial.printf("[ICON] Using custom minimalist vector icon for id=%d\n", static_cast<int>(id));
+		return create_fallback_circle(parent, vectorColor, id);
 	}
 
 	const IconPathSpec spec = icon_path_spec(id);

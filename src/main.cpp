@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <lvgl.h>
 #include <ArduinoJson.h>
+#include <time.h>
 
 #include "generated_git_version.h"
 #include "audio/audio_engine.h"
@@ -102,7 +103,7 @@ uint32_t gLastBootWhooshMs = 0;
 size_t gLastRadarCompletedFrames = 0;
 uint32_t gLastSettingsRevision = 0;
 
-constexpr uint8_t kSystemInfoPageIndex = 4;
+constexpr uint8_t kSystemInfoPageIndex = 5;
 constexpr uint32_t kBootWhooshIntervalMs = 2200;
 
 ui::ThemeId CurrentThemeProvider(void* userContext) {
@@ -142,6 +143,72 @@ String FormatSpiffsUsage() {
          String(usedPercent) + "%)";
 }
 
+String FormatCurrentClock(const WeatherData& data) {
+  time_t now = time(nullptr);
+  if (now > 1700000000) {
+    now += static_cast<time_t>(data.timezoneOffsetMinutes * 60);
+    struct tm timeInfo;
+    gmtime_r(&now, &timeInfo);
+    char buffer[16];
+    strftime(buffer, sizeof(buffer), "%I:%M %p", &timeInfo);
+    String value(buffer);
+    if (value.length() > 0 && value[0] == '0') {
+      value.remove(0, 1);
+    }
+    return value;
+  }
+
+  if (data.currentLocalMinutes < 0) {
+    return "--:--";
+  }
+
+  const uint32_t baseMs = data.currentFetchedAtMs != 0 ? data.currentFetchedAtMs : data.lastCycleAtMs;
+  const uint32_t elapsedSeconds = baseMs == 0 ? 0 : ((millis() - baseMs) / 1000UL);
+  int totalMinutes = data.currentLocalMinutes + static_cast<int>(elapsedSeconds / 60UL);
+  totalMinutes %= (24 * 60);
+  if (totalMinutes < 0) {
+    totalMinutes += (24 * 60);
+  }
+
+  const int hour24 = totalMinutes / 60;
+  const int minute = totalMinutes % 60;
+  const bool isPm = hour24 >= 12;
+  int hour12 = hour24 % 12;
+  if (hour12 == 0) {
+    hour12 = 12;
+  }
+
+  char buffer[16];
+  snprintf(buffer, sizeof(buffer), "%d:%02d %s", hour12, minute, isPm ? "PM" : "AM");
+  return String(buffer);
+}
+
+uint8_t WifiSignalBars(bool connected, int32_t rssi) {
+  if (!connected) {
+    return 0;
+  }
+  if (rssi >= -55) {
+    return 4;
+  }
+  if (rssi >= -67) {
+    return 3;
+  }
+  if (rssi >= -75) {
+    return 2;
+  }
+  return 1;
+}
+
+int ClampBatteryPercent(int value) {
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 100) {
+    return 100;
+  }
+  return value;
+}
+
 void BuildPreviewPayload(void* userContext, JsonDocument& doc) {
   (void)userContext;
   const WeatherData& data = gWeatherApi.data();
@@ -178,7 +245,10 @@ void OnSettingsSaved(void* userContext, const app::AppSettings& settings) {
   apiCfg.locationQuery = settings.locationQuery;
   apiCfg.locationKey = settings.locationKey;
   apiCfg.useMetric = (settings.units == app::UnitsSystem::Metric);
+  apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
   gWeatherApi.begin(apiCfg);
+  gWeatherApi.requestRefresh();
+  gRadarEngine.reset();
   if (gMainUiStarted) {
     gUi.setTheme(settings.theme);
   } else {
@@ -191,44 +261,68 @@ void InitializeLedEngineAfterBoot() {
   if (gLedEngineInitialized) {
     return;
   }
-  gLedEngine.begin(96);
+  Serial.println("[LED] InitializeLedEngineAfterBoot: begin");
+  gLedEngine.begin(160);
+  Serial.println("[LED] InitializeLedEngineAfterBoot: calling selfTestBottom3()");
+  gLedEngine.selfTestBottom3();
+  Serial.println("[LED] InitializeLedEngineAfterBoot: selfTestBottom3() returned");
   gLedEngineInitialized = true;
   Serial.println("[LED] LED engine initialized");
 }
 
 void UpdateTouchFeedback() {
+  static bool wasTouchActive = false;
+  static bool swipeHandled = false;
+  static int lastDx = 0;
+  static int lastDy = 0;
+
   if (M5.Touch.getCount() == 0) {
+    if (wasTouchActive) {
+      if (!swipeHandled && abs(lastDx) >= 24 && abs(lastDx) > abs(lastDy) + 6) {
+        gUi.moveToAdjacentPage(lastDx < 0 ? 1 : -1, true);
+        gLedEngine.touchEvent(lastDx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, lastDx, lastDy);
+        gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
+      }
+      gUi.recenterActivePage(true);
+    }
+    wasTouchActive = false;
+    swipeHandled = false;
+    lastDx = 0;
+    lastDy = 0;
     return;
   }
 
+  wasTouchActive = true;
   const m5::Touch_Class::touch_detail_t& detail = M5.Touch.getDetail(0);
+  lastDx = detail.distanceX();
+  lastDy = detail.distanceY();
+
   if (detail.wasClicked()) {
-    gLedEngine.touchEvent(led::LedEngine::TouchKind::Tap, detail.distanceX(), detail.distanceY());
+    gLedEngine.touchEvent(led::LedEngine::TouchKind::Tap, lastDx, lastDy);
     gAudioEngine.playTouchSound(audio::TouchSound::TapClick);
     return;
   }
 
   if (detail.wasHold()) {
-    gLedEngine.touchEvent(led::LedEngine::TouchKind::LongPress, detail.distanceX(), detail.distanceY());
+    gLedEngine.touchEvent(led::LedEngine::TouchKind::LongPress, lastDx, lastDy);
     gAudioEngine.playTouchSound(audio::TouchSound::LongPressRise);
     return;
   }
 
-  if (!detail.wasFlicked()) {
+  if (!swipeHandled && abs(lastDx) >= 32 && abs(lastDx) > abs(lastDy) + 6) {
+    gUi.moveToAdjacentPage(lastDx < 0 ? 1 : -1, true);
+    gLedEngine.touchEvent(lastDx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, lastDx, lastDy);
+    gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
+    swipeHandled = true;
     return;
   }
 
-  const int dx = detail.distanceX();
-  const int dy = detail.distanceY();
-  if (abs(dx) >= abs(dy)) {
-    if (abs(dx) >= 24) {
-      gUi.moveToAdjacentPage(dx < 0 ? 1 : -1, true);
+  if (detail.wasFlicked()) {
+    if (abs(lastDx) < abs(lastDy)) {
+      gLedEngine.touchEvent(lastDy >= 0 ? led::LedEngine::TouchKind::SwipeDown : led::LedEngine::TouchKind::SwipeUp, lastDx, lastDy);
+      gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
     }
-    gLedEngine.touchEvent(dx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, dx, dy);
-  } else {
-    gLedEngine.touchEvent(dy >= 0 ? led::LedEngine::TouchKind::SwipeDown : led::LedEngine::TouchKind::SwipeUp, dx, dy);
   }
-  gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
 }
 
 void UpdateAlertFeedback(const WeatherData& data) {
@@ -255,6 +349,63 @@ void UpdateAlertFeedback(const WeatherData& data) {
 
   gLedEngine.alert(led::LedEngine::AlertLevel::Warning, severity);
   gAudioEngine.playAlertSound(audio::AlertSound::SevereWeather);
+}
+
+void OnRadarProgress(void* /*userContext*/, const weather::RadarProgress& progress) {
+  if (progress.totalFrames > 0) {
+    const uint32_t rawPercent = (progress.completedFrames * 100U) / progress.totalFrames;
+    const uint8_t percent = rawPercent > 100U ? 100U : static_cast<uint8_t>(rawPercent);
+    gLedEngine.progress(percent, progress.completedFrames < progress.totalFrames);
+  } else {
+    gLedEngine.progress(0, false);
+  }
+
+  if (gMainUiStarted) {
+    gUi.setRadarProgress(progress.completedFrames, progress.totalFrames, progress.stage);
+  }
+}
+
+void MaybeStartRadarDownload() {
+  const bool radarChanged = gWeatherApi.consumeRadarChanged();
+  const WeatherData& data = gWeatherApi.data();
+  if ((!radarChanged && gRadarEngine.frameCount() > 0) || gRadarEngine.isDownloading()) {
+    return;
+  }
+  if (data.radarFrameCount < weather::RadarEngine::kMinFrameCount) {
+    return;
+  }
+
+  String urls[weather::RadarEngine::kMaxFrameCount];
+  uint32_t epochs[weather::RadarEngine::kMaxFrameCount] = {};
+  const size_t availableCount = gWeatherApi.copyRadarFrames(urls, epochs, weather::RadarEngine::kMaxFrameCount);
+  const size_t count = availableCount > 0 ? 1 : 0;
+  if (count < 1) {
+    return;
+  }
+
+  urls[0] = urls[availableCount - 1];
+  epochs[0] = epochs[availableCount - 1];
+
+  weather::RadarDownloadConfig config;
+  config.storageMode = weather::RadarStorageMode::RamOnly;
+  config.expectedFormat = weather::RadarFrameFormat::EncodedPng;
+  config.expectedWidth = 256;
+  config.expectedHeight = 256;
+  config.ramBudgetBytes = 192 * 1024;
+  config.baseMapUrl = data.radarMapUrl;
+  config.connectTimeoutMs = 1500;
+  config.readTimeoutMs = 1500;
+
+  weather::RadarVisualConfig visuals;
+  visuals.enableFrameInterpolation = false;
+  visuals.enableAutoContrast = false;
+  visuals.enableStormCellOverlays = false;
+  visuals.interpolationSteps = 0;
+  visuals.smoothingPasses = 0;
+
+  gRadarEngine.setVisualConfig(visuals);
+  gRadarEngine.setAnimationFps(3.0f);
+  gRadarEngine.startDownload(urls, epochs, count, config);
 }
 
 void UpdateSystemEventAudio() {
@@ -326,9 +477,11 @@ void InitializeSubsystems() {
   apiCfg.locationQuery = gSettings.settings().locationQuery;
   apiCfg.locationKey = gSettings.settings().locationKey;
   apiCfg.useMetric = (gSettings.settings().units == app::UnitsSystem::Metric);
+  apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
   gWeatherApi.begin(apiCfg);
 
   gRadarEngine.begin();
+  gRadarEngine.setProgressCallback(OnRadarProgress, nullptr);
   gLastRadarCompletedFrames = gRadarEngine.completedFrameCount();
 
   gWebServer.begin(gSettings,
@@ -351,7 +504,7 @@ void setup() {
   cfg.output_power = true;
   cfg.internal_spk = true;
   cfg.internal_mic = true;
-  cfg.led_brightness = 64;
+  cfg.led_brightness = 0;
   M5.begin(cfg);
   Serial.println("[UI] M5.begin() complete");
 
@@ -394,7 +547,11 @@ void loop() {
   gWifi.update();
   gTime.update(gWifi.connected());
   gWeatherApi.update();
+  MaybeStartRadarDownload();
   gRadarEngine.tick();
+  if (!gRadarEngine.isDownloading()) {
+    gLedEngine.progress(0, false);
+  }
   gWebServer.tick();
 
   UpdateTouchFeedback();
@@ -405,6 +562,11 @@ void loop() {
   ui::SystemInfo systemInfo;
   const app::WifiStatusInfo wifiInfo = gWifi.statusInfo();
   const String primaryIp = wifiInfo.ipAddress.length() > 0 ? wifiInfo.ipAddress : wifiInfo.accessPointIpAddress;
+  systemInfo.wifiConnected = wifiInfo.connected;
+  systemInfo.wifiSignalBars = WifiSignalBars(wifiInfo.connected, wifiInfo.rssi);
+  systemInfo.batteryPct = ClampBatteryPercent(M5.Power.getBatteryLevel());
+  systemInfo.batteryCharging = static_cast<bool>(M5.Power.isCharging());
+  systemInfo.currentTime = FormatCurrentClock(weatherData);
   systemInfo.ipAddress = primaryIp;
   systemInfo.webUiUrl = primaryIp.length() > 0 ? String("http://") + primaryIp + ":80" : String();
   systemInfo.wifiSsid = wifiInfo.connected ? wifiInfo.ssid : (wifiInfo.accessPointSsid.length() > 0 ? wifiInfo.accessPointSsid : wifiInfo.ssid);
@@ -439,7 +601,7 @@ void loop() {
   }
 
   const bool warningState = gWeatherApi.hasAnyError() || (gRadarEngine.lastError() != weather::RadarEngineError::None);
-  gLedEngine.setSystemStatus(false, gWifi.connected(), warningState);
+  gLedEngine.setSystemStatus(!gMainUiStarted, gWifi.connected(), warningState);
   gLedEngine.update();
 
   gAudioEngine.update();

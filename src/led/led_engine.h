@@ -3,7 +3,14 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#include <memory>
+#include <vector>
+
 #include "../weather/weather_models.h"
+
+namespace m5 {
+class LED_Strip_Class;
+}
 
 namespace led {
 
@@ -49,6 +56,7 @@ class LedEngine {
 	void bootAnimation(float rotationPhase, float intensity, bool active = true, bool lockIn = false, bool fadingOut = false);
 	void setSystemStatus(bool booting, bool wifiConnected, bool warningActive);
 	void clearAlert();
+	void selfTestBottom3();
 	void setEventCallback(LedEventCallback callback, void* userContext);
 	String statusLabel() const;
 
@@ -56,7 +64,7 @@ class LedEngine {
 	size_t ledCount() const;
 
  private:
-	static const size_t kMaxLeds = 8;
+	static const size_t kMaxLeds = 10;
 
 	struct MoodPalette {
 		RGBColor primary;
@@ -138,6 +146,8 @@ class LedEngine {
 	void renderFrame(uint32_t nowMs);
 	uint8_t buildLayerStack(uint32_t nowMs, LayerEntry* outStack, uint8_t maxEntries) const;
 	void renderLayer(LayerId id, uint32_t nowMs);
+	bool initializeHardware();
+	uint8_t computePowerIndicatorLevel() const;
 	void pushToHardware();
 
 	MoodPalette chooseMoodPalette(const WeatherData& data) const;
@@ -160,10 +170,16 @@ class LedEngine {
 
 	bool initialized_ = false;
 	bool ready_ = false;
+	bool usingPowerIndicator_ = false;
+	bool usingM5Led_ = false;
+	bool usingExternalStrips_ = false;
 	uint8_t brightness_ = 96;
 	size_t ledCount_ = 0;
 	uint32_t lastRenderMs_ = 0;
 	uint32_t lastInitAttemptMs_ = 0;
+	uint8_t lastPowerIndicatorLevel_ = 0;
+	bool forceNextPush_ = true;
+	std::vector<std::shared_ptr<m5::LED_Strip_Class>> externalStrips_;
 
 	MoodPalette mood_;
 	TransitionState transition_;

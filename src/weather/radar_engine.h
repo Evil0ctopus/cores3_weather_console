@@ -52,6 +52,7 @@ struct RadarDownloadConfig {
 	uint32_t connectTimeoutMs = 2500;
 	uint32_t readTimeoutMs = 2500;
 	size_t ramBudgetBytes = 350 * 1024;
+	String baseMapUrl;
 	RadarFrameFormat expectedFormat = RadarFrameFormat::EncodedPng;
 	uint16_t expectedWidth = 0;
 	uint16_t expectedHeight = 0;
@@ -99,7 +100,7 @@ typedef void (*RadarProgressCallback)(void* userContext, const RadarProgress& pr
 
 class RadarEngine {
  public:
-	static constexpr size_t kMinFrameCount = 6;
+	static constexpr size_t kMinFrameCount = 1;
 	static constexpr size_t kMaxFrameCount = 12;
 	static constexpr size_t kMaxStormCells = 8;
 
@@ -107,6 +108,7 @@ class RadarEngine {
 	~RadarEngine();
 
 	void begin();
+	void reset();
 	void setProgressCallback(RadarProgressCallback callback, void* userContext);
 	void setAnimationFps(float fps);
 	float animationFps() const;
@@ -187,7 +189,15 @@ class RadarEngine {
 	bool ensureFrameResident(FrameSlot& slot);
 	bool ensureDisplayBuffer(size_t length);
 	bool buildDisplayFrame(FrameSlot& current, FrameSlot* next, uint8_t blendStep, uint8_t blendSteps);
-	bool decodePngFrameToRgb565(uint8_t*& decodedData, size_t& decodedLength, uint16_t& width, uint16_t& height);
+	bool fetchUrlToBuffer(const String& url, uint8_t*& outData, size_t& outLength, String& outContentType);
+	bool decodePngFrameToRgb565(const uint8_t* sourceData,
+									 size_t sourceLength,
+									 uint32_t backgroundColorRgb888,
+									 uint8_t*& decodedData,
+									 size_t& decodedLength,
+									 uint16_t& width,
+									 uint16_t& height,
+									 bool reportErrors = true);
 	bool applyStaticPostProcess(uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height);
 	void applyStormCellOverlay(uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height, const RadarStormCell* cells, size_t count);
 	void detectStormCells(const uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height, RadarStormCell* outCells, size_t& outCount) const;

@@ -63,6 +63,8 @@ struct WeatherData {
 	String locationKey;
 	String locationName;
 	String timezoneId;
+	int timezoneOffsetMinutes = 0;
+	int currentLocalMinutes = -1;
 
 	CurrentConditions current;
 
@@ -74,6 +76,9 @@ struct WeatherData {
 
 	RadarTileFrame radarFrames[kMaxRadarFrames];
 	size_t radarFrameCount = 0;
+	String radarMapUrl;
+	int radarMarkerX = 128;
+	int radarMarkerY = 128;
 
 	uint32_t currentFetchedAtMs = 0;
 	uint32_t forecastFetchedAtMs = 0;

@@ -21,7 +21,11 @@ class RadarPanel {
 	lv_obj_t* titleLabel_ = nullptr;
 	lv_obj_t* metaLabel_ = nullptr;
 	lv_obj_t* stageLabel_ = nullptr;
+	lv_obj_t* imageFrame_ = nullptr;
 	lv_obj_t* image_ = nullptr;
+	lv_obj_t* locationDot_ = nullptr;
+	lv_obj_t* attributionLabel_ = nullptr;
+	lv_obj_t* alertLabel_ = nullptr;
 };
 
 }  // namespace ui

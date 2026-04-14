@@ -16,11 +16,20 @@ void WeeklyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
 
 	title_ = lv_label_create(root_);
+	lv_obj_add_style(title_, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(title_, theme.typography().pageTitleZoom, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(title_, 115, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(title_, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(title_, theme.palette().surfaceAlt, LV_PART_MAIN);
+	lv_obj_set_style_radius(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_left(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_right(title_, 8, LV_PART_MAIN);
+	lv_obj_set_style_pad_top(title_, 3, LV_PART_MAIN);
+	lv_obj_set_style_pad_bottom(title_, 3, LV_PART_MAIN);
 	lv_label_set_text(title_, "Weekly");
 	lv_obj_align(title_, LV_ALIGN_TOP_LEFT, 0, 0);
+	lv_obj_move_foreground(title_);
 
 	list_ = lv_obj_create(root_);
 	lv_obj_set_size(list_, lv_pct(100), lv_pct(100));

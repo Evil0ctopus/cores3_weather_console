@@ -46,6 +46,36 @@ float asMetricTemperature(float value, const String& unit) {
 	return value;
 }
 
+int parseLocalMinutes(const String& isoText) {
+	const int timeStart = isoText.indexOf('T') >= 0 ? isoText.indexOf('T') + 1 : 0;
+	if (isoText.length() < (timeStart + 5)) {
+		return -1;
+	}
+	const int colonIndex = isoText.indexOf(':', timeStart);
+	if (colonIndex < 0) {
+		return -1;
+	}
+	const int hour = isoText.substring(timeStart, colonIndex).toInt();
+	const int minute = isoText.substring(colonIndex + 1, colonIndex + 3).toInt();
+	if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+		return -1;
+	}
+	return (hour * 60) + minute;
+}
+
+int parseTimezoneOffsetMinutes(const String& isoText) {
+	if (isoText.length() >= 6 && isoText[isoText.length() - 3] == ':') {
+		const char signChar = isoText[isoText.length() - 6];
+		if (signChar == '+' || signChar == '-') {
+			const int hours = isoText.substring(isoText.length() - 5, isoText.length() - 3).toInt();
+			const int minutes = isoText.substring(isoText.length() - 2).toInt();
+			const int total = hours * 60 + minutes;
+			return signChar == '-' ? -total : total;
+		}
+	}
+	return 0;
+}
+
 }  // namespace
 
 WeatherApi::WeatherApi() = default;
@@ -56,6 +86,9 @@ bool WeatherApi::begin(const WeatherApiConfig& config) {
 	forceRefresh_ = true;
 	radarChanged_ = false;
 	lastRequestAtMs_ = 0;
+	nextAllowedAttemptMs_ = 0;
+	resolvedLatitude_ = NAN;
+	resolvedLongitude_ = NAN;
 	data_ = WeatherData();
 	data_.locationKey = config_.locationKey;
 	data_.locationName = config_.locationQuery;
@@ -83,6 +116,9 @@ void WeatherApi::update() {
 	if (usingOpenMeteo() && !ensureOpenMeteoLocationResolved()) {
 		return;
 	}
+	if (!usingOpenMeteo() && !isnan(resolvedLatitude_) && !isnan(resolvedLongitude_)) {
+		data_.locationKey = config_.locationKey;
+	}
 
 	if (WiFi.status() != WL_CONNECTED) {
 		setError(WeatherErrorCode::WifiDisconnected, "wifi disconnected");
@@ -90,6 +126,9 @@ void WeatherApi::update() {
 	}
 
 	const uint32_t now = millis();
+	if (nextAllowedAttemptMs_ != 0 && now < nextAllowedAttemptMs_) {
+		return;
+	}
 	if ((now - lastRequestAtMs_) < config_.minRequestGapMs) {
 		return;
 	}
@@ -100,15 +139,15 @@ void WeatherApi::update() {
 	}
 
 	String endpoint;
-	if (usingOpenMeteo()) {
+	if (task == UpdateTask::Radar) {
+		if (!ensureLocationCoordinatesResolved()) {
+			return;
+		}
+		endpoint = "http://api.rainviewer.com/public/weather-maps.json";
+	} else if (usingOpenMeteo()) {
 		if (task == UpdateTask::Alerts) {
 			data_.alertCount = 0;
 			data_.alertsFetchedAtMs = now;
-			return;
-		}
-		if (task == UpdateTask::Radar) {
-			data_.radarFrameCount = 0;
-			data_.radarFetchedAtMs = now;
 			return;
 		}
 		endpoint = buildOpenMeteoForecastUrl();
@@ -123,8 +162,10 @@ void WeatherApi::update() {
 		endpoint = config_.baseUrl + "/alerts/v1/" + config_.locationKey +
 							 "?language=" + config_.language + buildAuthQuery();
 	} else {
-		endpoint = config_.baseUrl + "/maps/v1/radar/" + config_.locationKey +
-							 "?language=" + config_.language + buildAuthQuery();
+		if (!ensureLocationCoordinatesResolved()) {
+			return;
+		}
+		endpoint = "http://api.rainviewer.com/public/weather-maps.json";
 	}
 
 	String payload;
@@ -137,16 +178,18 @@ void WeatherApi::update() {
 	}
 
 	bool parsed = false;
-	if (usingOpenMeteo()) {
-		parsed = parseCurrent(payload) && parseForecast(payload);
-		if (parsed) {
-			data_.currentFetchedAtMs = now;
-			data_.forecastFetchedAtMs = now;
-		}
-	} else if (task == UpdateTask::Current) {
-		parsed = parseCurrent(payload);
-		if (parsed) {
-			data_.currentFetchedAtMs = now;
+	if (task == UpdateTask::Current) {
+		if (usingOpenMeteo()) {
+			parsed = parseCurrent(payload) && parseForecast(payload);
+			if (parsed) {
+				data_.currentFetchedAtMs = now;
+				data_.forecastFetchedAtMs = now;
+			}
+		} else {
+			parsed = parseCurrent(payload);
+			if (parsed) {
+				data_.currentFetchedAtMs = now;
+			}
 		}
 	} else if (task == UpdateTask::Forecast) {
 		parsed = parseForecast(payload);
@@ -158,7 +201,7 @@ void WeatherApi::update() {
 		if (parsed) {
 			data_.alertsFetchedAtMs = now;
 		}
-	} else {
+	} else if (task == UpdateTask::Radar) {
 		parsed = parseRadar(payload);
 		if (parsed) {
 			data_.radarFetchedAtMs = now;
@@ -216,11 +259,17 @@ bool WeatherApi::usingOpenMeteo() const {
 	return config_.apiKey.length() == 0;
 }
 
-bool WeatherApi::ensureOpenMeteoLocationResolved() {
+bool WeatherApi::ensureLocationCoordinatesResolved() {
+	if (!isnan(resolvedLatitude_) && !isnan(resolvedLongitude_)) {
+		return updateRadarTileProjection();
+	}
+
 	float lat = 0.0f;
 	float lon = 0.0f;
 	if (parseLocationCoordinates(lat, lon)) {
-		return true;
+		resolvedLatitude_ = lat;
+		resolvedLongitude_ = lon;
+		return updateRadarTileProjection();
 	}
 
 	if (config_.locationQuery.length() == 0) {
@@ -230,7 +279,7 @@ bool WeatherApi::ensureOpenMeteoLocationResolved() {
 
 	String payload;
 	int httpStatus = 0;
-	const String endpoint = "https://geocoding-api.open-meteo.com/v1/search?name=" + urlEncode(config_.locationQuery) + "&count=1&language=en&format=json";
+	const String endpoint = "http://geocoding-api.open-meteo.com/v1/search?name=" + urlEncode(config_.locationQuery) + "&count=1&language=en&format=json";
 	if (!fetchJson(endpoint, payload, httpStatus)) {
 		return false;
 	}
@@ -248,24 +297,82 @@ bool WeatherApi::ensureOpenMeteoLocationResolved() {
 	}
 
 	JsonObject first = results[0].as<JsonObject>();
-	lat = first["latitude"] | NAN;
-	lon = first["longitude"] | NAN;
-	if (isnan(lat) || isnan(lon)) {
+	resolvedLatitude_ = first["latitude"] | NAN;
+	resolvedLongitude_ = first["longitude"] | NAN;
+	if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_)) {
 		setError(WeatherErrorCode::ResponseShapeError, "geocode coordinates missing");
 		return false;
 	}
 
-	config_.locationKey = String(lat, 4) + "," + String(lon, 4);
-	data_.locationKey = config_.locationKey;
-	data_.locationName = String(static_cast<const char*>(first["name"] | ""));
-	const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
-	if (admin1.length() > 0) {
-		data_.locationName += ", " + admin1;
+	if (usingOpenMeteo()) {
+		config_.locationKey = String(resolvedLatitude_, 4) + "," + String(resolvedLongitude_, 4);
+		data_.locationKey = config_.locationKey;
 	}
 	if (data_.locationName.length() == 0) {
-		data_.locationName = config_.locationQuery;
+		data_.locationName = String(static_cast<const char*>(first["name"] | ""));
+		const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
+		if (admin1.length() > 0) {
+			data_.locationName += ", " + admin1;
+		}
+		if (data_.locationName.length() == 0) {
+			data_.locationName = config_.locationQuery;
+		}
+	}
+	return updateRadarTileProjection();
+}
+
+bool WeatherApi::updateRadarTileProjection(uint8_t radarZoom, int* outTileX, int* outTileY) {
+	if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_)) {
+		return false;
+	}
+
+	double latitude = static_cast<double>(resolvedLatitude_);
+	if (latitude > 85.05112878) {
+		latitude = 85.05112878;
+	} else if (latitude < -85.05112878) {
+		latitude = -85.05112878;
+	}
+
+	double longitude = static_cast<double>(resolvedLongitude_);
+	const double tileCount = static_cast<double>(1UL << radarZoom);
+	double xTileFloat = ((longitude + 180.0) / 360.0) * tileCount;
+	const double latRadians = latitude * PI / 180.0;
+	double yTileFloat = (1.0 - log(tan(latRadians) + (1.0 / cos(latRadians))) / PI) * 0.5 * tileCount;
+	const double maxTileValue = tileCount - 0.000001;
+	if (xTileFloat < 0.0) {
+		xTileFloat = 0.0;
+	} else if (xTileFloat > maxTileValue) {
+		xTileFloat = maxTileValue;
+	}
+	if (yTileFloat < 0.0) {
+		yTileFloat = 0.0;
+	} else if (yTileFloat > maxTileValue) {
+		yTileFloat = maxTileValue;
+	}
+
+	const int xTile = static_cast<int>(floor(xTileFloat));
+	const int yTile = static_cast<int>(floor(yTileFloat));
+	int markerX = static_cast<int>(floor((xTileFloat - static_cast<double>(xTile)) * 256.0));
+	int markerY = static_cast<int>(floor((yTileFloat - static_cast<double>(yTile)) * 256.0));
+	if (markerX < 0) markerX = 0;
+	if (markerX > 255) markerX = 255;
+	if (markerY < 0) markerY = 0;
+	if (markerY > 255) markerY = 255;
+
+	data_.radarMarkerX = markerX;
+	data_.radarMarkerY = markerY;
+	data_.radarMapUrl = String("https://tile.openstreetmap.org/") + String(radarZoom) + "/" + String(xTile) + "/" + String(yTile) + ".png";
+	if (outTileX != nullptr) {
+		*outTileX = xTile;
+	}
+	if (outTileY != nullptr) {
+		*outTileY = yTile;
 	}
 	return true;
+}
+
+bool WeatherApi::ensureOpenMeteoLocationResolved() {
+	return ensureLocationCoordinatesResolved();
 }
 
 bool WeatherApi::parseLocationCoordinates(float& outLat, float& outLon) const {
@@ -328,8 +435,8 @@ bool WeatherApi::fetchJson(const String& url, String& payload, int& httpStatus) 
 		}
 	}
 
-	http.setConnectTimeout(2500);
-	http.setTimeout(2500);
+	http.setConnectTimeout(config_.connectTimeoutMs);
+	http.setTimeout(config_.requestTimeoutMs);
 	http.addHeader("Accept", "application/json");
 	httpStatus = http.GET();
 
@@ -380,6 +487,9 @@ bool WeatherApi::parseCurrent(const String& payload) {
 	if (usingOpenMeteo()) {
 		const int weatherCode = item["weather_code"] | -1;
 		const bool isDaylight = (item["is_day"] | 1) != 0;
+		data_.timezoneId = String(doc["timezone"] | "");
+		data_.timezoneOffsetMinutes = static_cast<int>((doc["utc_offset_seconds"] | 0) / 60);
+		data_.currentLocalMinutes = parseLocalMinutes(String(item["time"] | ""));
 		data_.current.observedEpoch = 0;
 		data_.current.summary = openMeteoSummaryFromCode(weatherCode);
 		data_.current.icon = openMeteoIconFromCode(weatherCode, isDaylight);
@@ -396,6 +506,9 @@ bool WeatherApi::parseCurrent(const String& payload) {
 	}
 
 	data_.current.observedEpoch = item["EpochTime"] | 0;
+	const String observationTime = String(item["LocalObservationDateTime"] | "");
+	data_.currentLocalMinutes = parseLocalMinutes(observationTime);
+	data_.timezoneOffsetMinutes = parseTimezoneOffsetMinutes(observationTime);
 	data_.current.summary = String(item["WeatherText"] | "");
 	data_.current.icon = item["WeatherIcon"] | -1;
 	data_.current.isDaylight = item["IsDayTime"] | true;
@@ -625,35 +738,71 @@ bool WeatherApi::parseRadar(const String& payload) {
 		return false;
 	}
 
-	JsonArray frames = doc["Frames"].as<JsonArray>();
-	if (frames.isNull()) {
-		frames = doc["Radar"]["Frames"].as<JsonArray>();
+	if (!ensureLocationCoordinatesResolved()) {
+		return false;
 	}
-	if (frames.isNull()) {
+
+	const uint8_t radarZoom = 7;
+	int xTile = 0;
+	int yTile = 0;
+	if (!updateRadarTileProjection(radarZoom, &xTile, &yTile)) {
+		setError(WeatherErrorCode::ResponseShapeError, "radar projection failed");
+		return false;
+	}
+
+	String host = String(doc["host"] | "");
+	host.replace("https://", "http://");
+	JsonArray pastFrames = doc["radar"]["past"].as<JsonArray>();
+	JsonArray nowcastFrames = doc["radar"]["nowcast"].as<JsonArray>();
+	if (host.length() == 0 || (pastFrames.isNull() && nowcastFrames.isNull())) {
 		setError(WeatherErrorCode::ResponseShapeError, "radar frames missing");
 		return false;
 	}
 
 	data_.radarFrameCount = 0;
-	for (JsonVariant v : frames) {
-		if (data_.radarFrameCount >= kMaxRadarFrames) {
-			break;
+	auto appendFrames = [&](JsonArray frames) {
+		for (JsonVariant v : frames) {
+			if (data_.radarFrameCount >= kMaxRadarFrames) {
+				break;
+			}
+			JsonObject f = v.as<JsonObject>();
+			const String path = String(f["path"] | "");
+			if (path.length() == 0) {
+				continue;
+			}
+			RadarTileFrame& out = data_.radarFrames[data_.radarFrameCount++];
+			out = RadarTileFrame();
+			out.valid = true;
+			out.epochTime = f["time"] | 0;
+			out.url = host + path + "/256/" + String(radarZoom) + "/" + String(xTile) + "/" + String(yTile) + "/6/1_1.png";
 		}
-		JsonObject f = v.as<JsonObject>();
-		String url = String(f["Url"] | f["TileUrl"] | "");
-		if (url.length() == 0) {
-			continue;
-		}
+	};
 
-		RadarTileFrame& out = data_.radarFrames[data_.radarFrameCount++];
-		out = RadarTileFrame();
-		out.valid = true;
-		out.url = url;
-		out.epochTime = f["EpochTime"] | f["Time"] | 0;
+	if (!pastFrames.isNull()) {
+		const size_t totalPast = pastFrames.size();
+		const size_t startIndex = totalPast > kMaxRadarFrames ? (totalPast - kMaxRadarFrames) : 0;
+		for (size_t i = startIndex; i < totalPast; ++i) {
+			if (data_.radarFrameCount >= kMaxRadarFrames) {
+				break;
+			}
+			JsonObject f = pastFrames[i].as<JsonObject>();
+			const String path = String(f["path"] | "");
+			if (path.length() == 0) {
+				continue;
+			}
+			RadarTileFrame& out = data_.radarFrames[data_.radarFrameCount++];
+			out = RadarTileFrame();
+			out.valid = true;
+			out.epochTime = f["time"] | 0;
+			out.url = host + path + "/256/" + String(radarZoom) + "/" + String(xTile) + "/" + String(yTile) + "/6/1_1.png";
+		}
+	}
+	if (data_.radarFrameCount < kMaxRadarFrames && !nowcastFrames.isNull()) {
+		appendFrames(nowcastFrames);
 	}
 
-	if (data_.radarFrameCount < 6) {
-		setError(WeatherErrorCode::ResponseShapeError, "radar frame count < 6");
+	if (data_.radarFrameCount < 1) {
+		setError(WeatherErrorCode::ResponseShapeError, "no radar frames available");
 		return false;
 	}
 
@@ -664,12 +813,16 @@ void WeatherApi::setError(WeatherErrorCode code, const String& message, int http
 	data_.lastError = code;
 	data_.lastErrorMessage = message;
 	data_.lastHttpStatus = httpStatus;
+	if (config_.failureRetryMs > 0) {
+		nextAllowedAttemptMs_ = millis() + config_.failureRetryMs;
+	}
 }
 
 void WeatherApi::clearError() {
 	data_.lastError = WeatherErrorCode::None;
 	data_.lastErrorMessage = "";
 	data_.lastHttpStatus = 0;
+	nextAllowedAttemptMs_ = 0;
 }
 
 WeatherApi::UpdateTask WeatherApi::chooseTask(uint32_t nowMs) const {

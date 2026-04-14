@@ -19,6 +19,9 @@ struct WeatherApiConfig {
 	uint32_t alertsCacheMs = 5UL * 60UL * 1000UL;
 	uint32_t radarCacheMs = 10UL * 60UL * 1000UL;
 	uint32_t minRequestGapMs = 250UL;
+	uint32_t failureRetryMs = 30000UL;
+	uint32_t connectTimeoutMs = 1200UL;
+	uint32_t requestTimeoutMs = 1500UL;
 };
 
 class WeatherApi {
@@ -48,6 +51,8 @@ class WeatherApi {
 	bool isConfigured() const;
 	bool usingOpenMeteo() const;
 	bool ensureOpenMeteoLocationResolved();
+	bool ensureLocationCoordinatesResolved();
+	bool updateRadarTileProjection(uint8_t radarZoom = 7, int* outTileX = nullptr, int* outTileY = nullptr);
 	bool parseLocationCoordinates(float& outLat, float& outLon) const;
 	String buildOpenMeteoForecastUrl() const;
 	String openMeteoSummaryFromCode(int weatherCode) const;
@@ -72,7 +77,10 @@ class WeatherApi {
 	bool configured_ = false;
 
 	uint32_t lastRequestAtMs_ = 0;
+	uint32_t nextAllowedAttemptMs_ = 0;
 	UpdateTask lastTask_ = UpdateTask::Idle;
+	float resolvedLatitude_ = NAN;
+	float resolvedLongitude_ = NAN;
 };
 
 }  // namespace weather

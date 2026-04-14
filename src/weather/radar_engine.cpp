@@ -7,8 +7,8 @@
 namespace weather {
 namespace {
 
-const uint32_t kAnimationMinFps = 6;
-const uint32_t kAnimationMaxFps = 12;
+const uint32_t kAnimationMinFps = 3;
+const uint32_t kAnimationMaxFps = 10;
 const uint32_t kDownloadPumpSliceBytes = 4096;
 const uint32_t kDownloadPumpIntervalMs = 2;
 const uint8_t kStormDetectFloor = 148;
@@ -20,6 +20,7 @@ struct PngDecodeContext {
 	PNG* decoder = nullptr;
 	uint8_t* buffer = nullptr;
 	size_t strideBytes = 0;
+	uint32_t backgroundColor = 0x00000000;
 };
 
 int decodePngLine(PNGDRAW* draw) {
@@ -28,7 +29,7 @@ int decodePngLine(PNGDRAW* draw) {
 		return 0;
 	}
 	uint16_t* row = reinterpret_cast<uint16_t*>(context->buffer + (static_cast<size_t>(draw->y) * context->strideBytes));
-	context->decoder->getLineAsRGB565(draw, row, PNG_RGB565_LITTLE_ENDIAN, 0x00000000);
+	context->decoder->getLineAsRGB565(draw, row, PNG_RGB565_LITTLE_ENDIAN, context->backgroundColor);
 	return 1;
 }
 
@@ -192,6 +193,11 @@ void RadarEngine::begin() {
 	lastAnimationStepMs_ = millis();
 }
 
+void RadarEngine::reset() {
+	resetAll();
+	emitProgress("idle");
+}
+
 void RadarEngine::setProgressCallback(RadarProgressCallback callback, void* userContext) {
 	progressCallback_ = callback;
 	progressUserContext_ = userContext;
@@ -212,6 +218,9 @@ void RadarEngine::setVisualConfig(const RadarVisualConfig& config) {
 	}
 	if (visualConfig_.smoothingPasses > 3) {
 		visualConfig_.smoothingPasses = 3;
+	}
+	if (visualConfig_.enableFrameInterpolation && visualConfig_.interpolationSteps > 0 && visualConfig_.smoothingPasses > 1) {
+		visualConfig_.smoothingPasses = 1;
 	}
 	invalidateDescriptors();
 }
@@ -263,7 +272,7 @@ bool RadarEngine::startDownload(const String* tileUrls,
 																size_t frameCount,
 																const RadarDownloadConfig& config) {
 	if (tileUrls == nullptr || frameCount < kMinFrameCount || frameCount > kMaxFrameCount) {
-		transitionToError(RadarEngineError::InvalidInput, "frameCount must be 6..12 with valid URL array");
+		transitionToError(RadarEngineError::InvalidInput, "frameCount must be 1..12 with valid URL array");
 		return false;
 	}
 	if (state_ != DownloadState::Idle && state_ != DownloadState::Complete && state_ != DownloadState::Error) {
@@ -287,6 +296,13 @@ bool RadarEngine::startDownload(const String* tileUrls,
 		frames_[i].info.width = config_.expectedWidth;
 		frames_[i].info.height = config_.expectedHeight;
 		frames_[i].info.format = config_.expectedFormat;
+	}
+
+	if (config_.expectedWidth > 0 && config_.expectedHeight > 0) {
+		const size_t displayBytesHint = static_cast<size_t>(config_.expectedWidth) * static_cast<size_t>(config_.expectedHeight) * 2U;
+		if (!ensureDisplayBuffer(displayBytesHint)) {
+			return false;
+		}
 	}
 
 	downloadStarted_ = true;
@@ -496,6 +512,7 @@ void RadarEngine::transitionToError(RadarEngineError code, const String& message
 	activeClient_.stop();
 	activeSecureClient_.stop();
 	activeTransportClient_ = nullptr;
+	Serial.printf("[RADAR] error=%d http=%d msg=%s\n", static_cast<int>(code), httpStatus, message.c_str());
 	emitProgress("error");
 }
 
@@ -547,6 +564,138 @@ bool RadarEngine::parseUrl(const String& url, UrlParts& out) const {
 	return out.host.length() > 0;
 }
 
+bool RadarEngine::fetchUrlToBuffer(const String& url, uint8_t*& outData, size_t& outLength, String& outContentType) {
+	outData = nullptr;
+	outLength = 0;
+	outContentType = "";
+
+	UrlParts parts;
+	if (!parseUrl(url, parts)) {
+		return false;
+	}
+
+	WiFiClient client;
+	WiFiClientSecure secureClient;
+	Client* transport = nullptr;
+	const uint32_t timeoutSeconds = (config_.readTimeoutMs + 999U) / 1000U;
+	bool connected = false;
+	if (parts.secure) {
+		secureClient.setInsecure();
+		secureClient.setTimeout(timeoutSeconds == 0 ? 1 : timeoutSeconds);
+		connected = secureClient.connect(parts.host.c_str(), parts.port);
+		transport = &secureClient;
+	} else {
+		client.setTimeout(timeoutSeconds == 0 ? 1 : timeoutSeconds);
+		connected = client.connect(parts.host.c_str(), parts.port, config_.connectTimeoutMs);
+		transport = &client;
+	}
+	if (!connected || transport == nullptr) {
+		Serial.println("[RADAR] map connect failed");
+		return false;
+	}
+
+	const String request = "GET " + parts.path + " HTTP/1.1\r\nHost: " + parts.host +
+								 "\r\nUser-Agent: Flic-Radar/1.0\r\nConnection: close\r\n\r\n";
+	transport->print(request);
+
+	String lineBuffer;
+	bool headerDone = false;
+	int httpCode = 0;
+	int contentLength = -1;
+	uint32_t startedAt = millis();
+	uint32_t lastReadAt = startedAt;
+	while (!headerDone && transport->connected()) {
+		while (transport->available() > 0) {
+			char c = static_cast<char>(transport->read());
+			lastReadAt = millis();
+			if (c == '\r') {
+				continue;
+			}
+			if (c == '\n') {
+				if (lineBuffer.length() == 0) {
+					headerDone = true;
+					break;
+				}
+				if (lineBuffer.startsWith("HTTP/")) {
+					int firstSpace = lineBuffer.indexOf(' ');
+					int secondSpace = lineBuffer.indexOf(' ', firstSpace + 1);
+					String codeText = secondSpace > 0 ? lineBuffer.substring(firstSpace + 1, secondSpace) : lineBuffer.substring(firstSpace + 1);
+					httpCode = codeText.toInt();
+				} else if (lineBuffer.startsWith("Content-Length:") || lineBuffer.startsWith("content-length:")) {
+					int colon = lineBuffer.indexOf(':');
+					contentLength = lineBuffer.substring(colon + 1).toInt();
+				} else if (lineBuffer.startsWith("Content-Type:") || lineBuffer.startsWith("content-type:")) {
+					int colon = lineBuffer.indexOf(':');
+					outContentType = lineBuffer.substring(colon + 1);
+					outContentType.trim();
+				}
+				lineBuffer = "";
+			} else {
+				lineBuffer += c;
+			}
+		}
+		if (headerDone) {
+			break;
+		}
+		if ((millis() - lastReadAt) > config_.readTimeoutMs || (millis() - startedAt) > config_.readTimeoutMs) {
+			break;
+		}
+		delay(1);
+	}
+
+	if (!headerDone || httpCode < 200 || httpCode >= 300) {
+		transport->stop();
+		return false;
+	}
+
+	size_t capacity = contentLength > 0 ? static_cast<size_t>(contentLength) : 8192U;
+	outData = static_cast<uint8_t*>(malloc(capacity));
+	if (outData == nullptr) {
+		transport->stop();
+		return false;
+	}
+
+	uint8_t scratch[512];
+	while (transport->connected() || transport->available() > 0) {
+		while (transport->available() > 0) {
+			int readLen = transport->read(scratch, sizeof(scratch));
+			if (readLen <= 0) {
+				break;
+			}
+			lastReadAt = millis();
+			if (outLength + static_cast<size_t>(readLen) > capacity) {
+				size_t nextCapacity = capacity;
+				while (nextCapacity < outLength + static_cast<size_t>(readLen)) {
+					nextCapacity *= 2U;
+				}
+				uint8_t* next = static_cast<uint8_t*>(realloc(outData, nextCapacity));
+				if (next == nullptr) {
+					free(outData);
+					outData = nullptr;
+					transport->stop();
+					return false;
+				}
+				outData = next;
+				capacity = nextCapacity;
+			}
+			memcpy(outData + outLength, scratch, static_cast<size_t>(readLen));
+			outLength += static_cast<size_t>(readLen);
+		}
+		if ((millis() - lastReadAt) > config_.readTimeoutMs) {
+			break;
+		}
+		delay(1);
+	}
+	transport->stop();
+
+	if (outLength == 0) {
+		free(outData);
+		outData = nullptr;
+		return false;
+	}
+	return true;
+}
+
 bool RadarEngine::beginFrameDownload(size_t index) {
 	if (index >= frameCount_) {
 		return false;
@@ -557,13 +706,14 @@ bool RadarEngine::beginFrameDownload(size_t index) {
 	}
 
 	bool connected = false;
+	const uint32_t timeoutSeconds = (config_.readTimeoutMs + 999U) / 1000U;
 	if (activeUrl_.secure) {
 		activeSecureClient_.setInsecure();
-		activeSecureClient_.setTimeout(config_.readTimeoutMs / 1000);
+		activeSecureClient_.setTimeout(timeoutSeconds == 0 ? 1 : timeoutSeconds);
 		connected = activeSecureClient_.connect(activeUrl_.host.c_str(), activeUrl_.port);
 		activeTransportClient_ = &activeSecureClient_;
 	} else {
-		activeClient_.setTimeout(config_.readTimeoutMs / 1000);
+		activeClient_.setTimeout(timeoutSeconds == 0 ? 1 : timeoutSeconds);
 		connected = activeClient_.connect(activeUrl_.host.c_str(), activeUrl_.port, config_.connectTimeoutMs);
 		activeTransportClient_ = &activeClient_;
 	}
@@ -700,7 +850,17 @@ void RadarEngine::pumpDownload() {
 		}
 
 		activeReceived_ = activeTempLength_;
+		if (activeContentLength_ > 0 && static_cast<int>(activeTempLength_) >= activeContentLength_) {
+			state_ = DownloadState::FinalizeFrame;
+			stateEnteredMs_ = now;
+			finalizeFrame();
+			return;
+		}
 		if (activeTransportClient_ != nullptr && !activeTransportClient_->connected() && activeTransportClient_->available() == 0) {
+			if (activeTempLength_ == 0) {
+				transitionToError(RadarEngineError::ParseError, "empty radar response body", activeHttpCode_);
+				return;
+			}
 			state_ = DownloadState::FinalizeFrame;
 			stateEnteredMs_ = now;
 			finalizeFrame();
@@ -718,10 +878,46 @@ void RadarEngine::finalizeFrame() {
 	slot.autoStormCellCount = 0;
 
 	if (finalizedFormat == RadarFrameFormat::EncodedPng) {
+		Serial.printf("[RADAR] decoding png bytes=%u\n", static_cast<unsigned>(activeTempLength_));
+		uint8_t* mapPngData = nullptr;
+		size_t mapPngLength = 0;
+		String mapContentType;
+		uint8_t* decodedMapData = nullptr;
+		size_t decodedMapLength = 0;
+		uint16_t mapWidth = 0;
+		uint16_t mapHeight = 0;
+		if (config_.baseMapUrl.length() > 0 && fetchUrlToBuffer(config_.baseMapUrl, mapPngData, mapPngLength, mapContentType)) {
+			if (!decodePngFrameToRgb565(mapPngData, mapPngLength, 0x00FFFFFF, decodedMapData, decodedMapLength, mapWidth, mapHeight, false)) {
+				Serial.println("[RADAR] map decode failed, using radar overlay only");
+			}
+			free(mapPngData);
+			mapPngData = nullptr;
+		}
+
 		uint8_t* decodedData = nullptr;
 		size_t decodedLength = 0;
-		if (!decodePngFrameToRgb565(decodedData, decodedLength, finalizedWidth, finalizedHeight)) {
+		const uint32_t backgroundColor = decodedMapData != nullptr ? 0x00FF00FF : 0x00000000;
+		if (!decodePngFrameToRgb565(activeTempBuffer_, activeTempLength_, backgroundColor, decodedData, decodedLength, finalizedWidth, finalizedHeight, true)) {
+			if (decodedMapData != nullptr) {
+				free(decodedMapData);
+			}
 			return;
+		}
+		if (decodedMapData != nullptr && decodedMapLength == decodedLength && mapWidth == finalizedWidth && mapHeight == finalizedHeight) {
+			const uint16_t chromaKey = 0xF81F;
+			const size_t pixelCount = decodedLength / 2U;
+			for (size_t pixel = 0; pixel < pixelCount; ++pixel) {
+				const size_t offset = pixel * 2U;
+				const uint16_t overlay = static_cast<uint16_t>(decodedData[offset]) |
+					(static_cast<uint16_t>(decodedData[offset + 1]) << 8);
+				if (overlay == chromaKey) {
+					decodedData[offset] = decodedMapData[offset];
+					decodedData[offset + 1] = decodedMapData[offset + 1];
+				}
+			}
+		}
+		if (decodedMapData != nullptr) {
+			free(decodedMapData);
 		}
 		free(activeTempBuffer_);
 		activeTempBuffer_ = decodedData;
@@ -752,6 +948,7 @@ void RadarEngine::finalizeFrame() {
 	if (currentDownloadIndex_ + 1 >= frameCount_) {
 		state_ = DownloadState::Complete;
 		downloadStarted_ = false;
+		Serial.printf("[RADAR] complete frames=%u bytes=%u\n", static_cast<unsigned>(completedFrameCount_), static_cast<unsigned>(slot.info.byteCount));
 		emitProgress("complete");
 		return;
 	}
@@ -763,6 +960,8 @@ void RadarEngine::finalizeFrame() {
 
 void RadarEngine::advanceAnimation() {
 	if (completedFrameCount_ < 2) {
+		interpolationStep_ = 0;
+		currentAnimationIndex_ = 0;
 		return;
 	}
 	const uint32_t fps = clampFps(animationFps_);
@@ -794,6 +993,20 @@ bool RadarEngine::ensureFrameResident(FrameSlot& slot) {
 	if (!slot.info.storedInSpiffs || slot.info.spiffsPath.length() == 0) {
 		return false;
 	}
+
+	for (size_t i = 0; i < frameCount_; ++i) {
+		FrameSlot& other = frames_[i];
+		if (&other == &slot) {
+			continue;
+		}
+		if (other.info.storedInSpiffs && other.ramData != nullptr) {
+			free(other.ramData);
+			other.ramData = nullptr;
+			other.ramLength = 0;
+			other.dscValid = false;
+		}
+	}
+
 	if (!ensureSpiffs()) {
 		return false;
 	}
@@ -863,6 +1076,9 @@ bool RadarEngine::buildDisplayFrame(FrameSlot& current, FrameSlot* next, uint8_t
 			const uint8_t blue = static_cast<uint8_t>((static_cast<uint16_t>(b0) * (255U - weight) + static_cast<uint16_t>(b1) * weight) / 255U);
 			const uint8_t alpha = static_cast<uint8_t>((static_cast<uint16_t>(a0) * (255U - weight) + static_cast<uint16_t>(a1) * weight) / 255U);
 			writePixel(displayBuffer_, pixel, current.info.format, red, green, blue, alpha);
+			if ((pixel & 0x03FFU) == 0U) {
+				yield();
+			}
 		}
 	}
 
@@ -889,23 +1105,35 @@ bool RadarEngine::buildDisplayFrame(FrameSlot& current, FrameSlot* next, uint8_t
 	return true;
 }
 
-bool RadarEngine::decodePngFrameToRgb565(uint8_t*& decodedData, size_t& decodedLength, uint16_t& width, uint16_t& height) {
+bool RadarEngine::decodePngFrameToRgb565(const uint8_t* sourceData,
+													 size_t sourceLength,
+													 uint32_t backgroundColorRgb888,
+													 uint8_t*& decodedData,
+													 size_t& decodedLength,
+													 uint16_t& width,
+													 uint16_t& height,
+													 bool reportErrors) {
 	decodedData = nullptr;
 	decodedLength = 0;
-	if (activeTempBuffer_ == nullptr || activeTempLength_ == 0) {
-		transitionToError(RadarEngineError::ParseError, "empty PNG frame");
+	auto fail = [&](RadarEngineError code, const char* message) {
+		if (reportErrors) {
+			transitionToError(code, message);
+		}
+	};
+	if (sourceData == nullptr || sourceLength == 0) {
+		fail(RadarEngineError::ParseError, "empty PNG frame");
 		return false;
 	}
 
 	PNG* decoder = static_cast<PNG*>(malloc(sizeof(PNG)));
 	if (decoder == nullptr) {
-		transitionToError(RadarEngineError::OutOfMemory, "failed to allocate PNG decoder");
+		fail(RadarEngineError::OutOfMemory, "failed to allocate PNG decoder");
 		return false;
 	}
-	const int openResult = decoder->openRAM(activeTempBuffer_, static_cast<int>(activeTempLength_), decodePngLine);
+	const int openResult = decoder->openRAM(const_cast<uint8_t*>(sourceData), static_cast<int>(sourceLength), decodePngLine);
 	if (openResult != PNG_SUCCESS) {
 		free(decoder);
-		transitionToError(RadarEngineError::ParseError, "PNG open failed");
+		fail(RadarEngineError::ParseError, "PNG open failed");
 		return false;
 	}
 
@@ -916,7 +1144,7 @@ bool RadarEngine::decodePngFrameToRgb565(uint8_t*& decodedData, size_t& decodedL
 	if (decodedData == nullptr) {
 		decoder->close();
 		free(decoder);
-		transitionToError(RadarEngineError::OutOfMemory, "failed to allocate decoded PNG buffer");
+		fail(RadarEngineError::OutOfMemory, "failed to allocate decoded PNG buffer");
 		return false;
 	}
 
@@ -924,6 +1152,7 @@ bool RadarEngine::decodePngFrameToRgb565(uint8_t*& decodedData, size_t& decodedL
 	context.decoder = decoder;
 	context.buffer = decodedData;
 	context.strideBytes = static_cast<size_t>(width) * 2U;
+	context.backgroundColor = backgroundColorRgb888;
 	const int decodeResult = decoder->decode(&context, PNG_FAST_PALETTE);
 	decoder->close();
 	free(decoder);
@@ -931,7 +1160,7 @@ bool RadarEngine::decodePngFrameToRgb565(uint8_t*& decodedData, size_t& decodedL
 		free(decodedData);
 		decodedData = nullptr;
 		decodedLength = 0;
-		transitionToError(RadarEngineError::ParseError, "PNG decode failed");
+		fail(RadarEngineError::ParseError, "PNG decode failed");
 		return false;
 	}
 	return true;
@@ -962,6 +1191,9 @@ bool RadarEngine::applyStaticPostProcess(uint8_t* data, size_t length, RadarFram
 		if (luma > maxLuma) {
 			maxLuma = luma;
 		}
+		if ((pixel & 0x03FFU) == 0U) {
+			yield();
+		}
 	}
 
 	const uint16_t lumaRange = static_cast<uint16_t>(maxLuma) - static_cast<uint16_t>(minLuma);
@@ -978,6 +1210,9 @@ bool RadarEngine::applyStaticPostProcess(uint8_t* data, size_t length, RadarFram
 		}
 		applyReflectivityColor(config_.reflectivityMode, red, green, blue);
 		writePixel(data, pixel, format, red, green, blue, alpha);
+		if ((pixel & 0x03FFU) == 0U) {
+			yield();
+		}
 	}
 
 	if (visualConfig_.smoothingPasses == 0) {
@@ -1023,6 +1258,9 @@ bool RadarEngine::applyStaticPostProcess(uint8_t* data, size_t length, RadarFram
 						  static_cast<uint8_t>(greenSum / sampleCount),
 						  static_cast<uint8_t>(blueSum / sampleCount),
 						  static_cast<uint8_t>(alphaSum / sampleCount));
+			}
+			if ((y % 16U) == 0U) {
+				yield();
 			}
 		}
 	}
@@ -1117,6 +1355,9 @@ void RadarEngine::detectStormCells(const uint8_t* data,
 			uint8_t alpha = 255;
 			readPixel(data, pixel, format, red, green, blue, alpha);
 			++histogram[luminanceOf(red, green, blue)];
+		}
+		if ((y % 24U) == 0U) {
+			yield();
 		}
 	}
 
@@ -1238,6 +1479,9 @@ void RadarEngine::detectStormCells(const uint8_t* data,
 				cell.velocityY = static_cast<int8_t>(verticalGradient > 280 ? 1 : (verticalGradient < -280 ? -1 : 0));
 			}
 		}
+		if ((y % 24U) == 2U) {
+			yield();
+		}
 	}
 }
 
@@ -1292,32 +1536,36 @@ bool RadarEngine::appendActiveData(const uint8_t* data, size_t len) {
 bool RadarEngine::commitActiveDataToStorage() {
 	FrameSlot& slot = frames_[currentDownloadIndex_];
 	const bool overRamBudget = (activeTempLength_ > config_.ramBudgetBytes);
-	const bool useSpiffs = (config_.storageMode == RadarStorageMode::SpiffsOnly) ||
-												 (config_.storageMode == RadarStorageMode::Auto && overRamBudget);
+	bool useSpiffs = (config_.storageMode == RadarStorageMode::SpiffsOnly) ||
+										 (config_.storageMode == RadarStorageMode::Auto && overRamBudget);
 
 	if (useSpiffs) {
-		if (!ensureSpiffs()) {
-			transitionToError(RadarEngineError::IoError, "SPIFFS not available");
-			return false;
+		if (ensureSpiffs()) {
+			String path = "/radar_" + String(static_cast<unsigned>(currentDownloadIndex_)) + ".bin";
+			File f = SPIFFS.open(path, FILE_WRITE);
+			if (f) {
+				size_t written = f.write(activeTempBuffer_, activeTempLength_);
+				f.close();
+				if (written == activeTempLength_) {
+					slot.info.storedInSpiffs = true;
+					slot.info.spiffsPath = path;
+					slot.ramData = nullptr;
+					slot.ramLength = 0;
+				} else {
+					SPIFFS.remove(path);
+					Serial.println("[RADAR] SPIFFS write incomplete, falling back to RAM");
+					useSpiffs = false;
+				}
+			} else {
+				Serial.println("[RADAR] SPIFFS open failed, falling back to RAM");
+				useSpiffs = false;
+			}
+		} else {
+			Serial.println("[RADAR] SPIFFS unavailable, falling back to RAM");
+			useSpiffs = false;
 		}
-
-		String path = "/radar_" + String(static_cast<unsigned>(currentDownloadIndex_)) + ".bin";
-		File f = SPIFFS.open(path, FILE_WRITE);
-		if (!f) {
-			transitionToError(RadarEngineError::IoError, "failed to open SPIFFS frame file");
-			return false;
-		}
-		size_t written = f.write(activeTempBuffer_, activeTempLength_);
-		f.close();
-		if (written != activeTempLength_) {
-			transitionToError(RadarEngineError::IoError, "failed to write full SPIFFS frame");
-			return false;
-		}
-		slot.info.storedInSpiffs = true;
-		slot.info.spiffsPath = path;
-		slot.ramData = nullptr;
-		slot.ramLength = 0;
-	} else {
+	}
+	if (!useSpiffs) {
 		uint8_t* exact = static_cast<uint8_t*>(malloc(activeTempLength_));
 		if (exact == nullptr) {
 			transitionToError(RadarEngineError::OutOfMemory, "failed to allocate frame storage");
