@@ -14,43 +14,80 @@
 
 ---
 
-## 🌤️ About the Project
+## About the Project
 
-**CoreS3 Weather Console** is a high-performance, embedded meteorological display built for the **M5Stack CoreS3** (powered by the ESP32-S3). It features custom UI rendering, smooth boot animations, radar behavior tracking, audio cues, and live atmospheric monitoring directly on the device's touch display.
+**CoreS3 Weather Console** is an embedded meteorological display for the **M5Stack CoreS3** (ESP32-S3). It features custom UI rendering, boot animations, radar-style visuals, audio cues, and live atmospheric monitoring on the device touch display.
 
----
-
-## ✨ Core Features
-
-* **Dynamic Radar & UI:** Polished weather console views with fluid radar behavior and custom graphics rendering.
-* **Custom Boot Sequence:** Engaging boot animations and transition states stored directly in system assets.
-* **Audio Integration:** Built-in audio cues and notification management for system events and alerts.
-* **Optimized PlatformIO Build:** Clean architecture utilizing structured directories for custom scripts, source logic, and configuration components.
+Wi-Fi credentials and weather API settings are configured on-device (captive provisioning / settings UI) and stored in NVS — nothing sensitive is hardcoded in the repo.
 
 ---
 
-## 🗂️ Repository Structure
+## Core Features
 
-* `src/` & `include/` — Core firmware logic, UI controllers, and header files.
-* `data/` — Boot animations, system assets, and graphical UI states.
-* `scripts/` — Build helpers and automation tools.
+* **Dynamic Radar & UI:** Weather console views with radar-style graphics and custom rendering.
+* **Custom Boot Sequence:** Boot animations and transition states stored in SPIFFS assets.
+* **Audio Integration:** On-device audio cues for system events and alerts.
+* **PlatformIO Build:** Structured firmware layout with scripts, source, and web/SPIFFS assets.
 
 ---
 
-## 🚀 Quick Start & Building
+## Repository Structure
 
-1. Ensure you have [PlatformIO](https://platformio.org/) installed in VS Code.
-2. Clone or download this repository and open the folder in your workspace.
-3. Connect your M5Stack CoreS3 via USB-C.
-4. Run the build and upload task:
-   ```bash
-   pio run -t upload
+* `src/` & `include/` — Firmware logic, UI controllers, and headers (`include/lv_conf.h` for LVGL).
+* `src/web/web_assets/` — SPIFFS payload (boot frames, backgrounds, audio, web UI). Mapped via `platformio.ini` `data_dir`.
+* `data/` — Working/source asset copies (not the flash `data_dir`).
+* `scripts/` — Build helpers (e.g. git version stamp).
 
-   ## ☕ Support My Work
+---
 
-If you find this firmware or my open-source security tools helpful, consider supporting future development and late-night coding sessions!
+## Quick Start & Building
+
+### Prerequisites
+
+1. [Visual Studio Code](https://code.visualstudio.com/) (or another editor) with the [PlatformIO](https://platformio.org/) extension / CLI.
+2. An M5Stack CoreS3 and a USB-C cable.
+
+### Clone and open
+
+```bash
+git clone https://github.com/Evil0ctopus/cores3_weather_console.git
+cd cores3_weather_console
+```
+
+Open the folder in VS Code (or your editor). PlatformIO will pick up `platformio.ini`.
+
+### Build, flash firmware, and upload SPIFFS
+
+Connect the CoreS3 over USB-C. Let PlatformIO auto-detect the serial port (do not hardcode `COMx` / `/dev/ttyUSB*` in project files).
+
+```bash
+# Firmware
+pio run -t upload
+
+# SPIFFS assets (boot frames, backgrounds, audio, web UI)
+pio run -t uploadfs
+```
+
+Or use the PlatformIO Upload / Upload Filesystem actions in the IDE status bar.
+
+### Serial monitor (optional)
+
+```bash
+pio device monitor
+```
+
+Default baud is `115200` (`monitor_speed` in `platformio.ini`).
+
+### First boot
+
+On first boot, use the on-device Wi-Fi provisioning AP / settings UI to join a network and enter your weather API key and location. No personal machine paths or secrets are required in the clone for a successful build.
+
+---
+
+## Support
+
+If you find this firmware helpful, consider supporting future development:
 
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/Evil0ctopus)
 
-👤 Author
-Joshua Lorson (@Evil0ctopus)
+**Author:** Joshua Lorson ([@Evil0ctopus](https://github.com/Evil0ctopus))
