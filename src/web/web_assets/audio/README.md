@@ -254,7 +254,6 @@ To contribute custom sound packs:
 
 ## Related Files
 
-- `audio_engine.h/cpp`: Core audio engine implementation
-- `audio_integration_helpers.h`: Integration helper functions
-- `AUDIO_INTEGRATION.md`: Detailed integration guide
-- `main.cpp`: System initialization and main loop
+- `src/audio/audio_engine.h` / `audio_engine.cpp`: Core audio engine
+- `src/audio/audio_integration_helpers.h`: Integration helpers
+- `src/main.cpp`: System initialization and main loop
