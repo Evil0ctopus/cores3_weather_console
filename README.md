@@ -90,4 +90,5 @@ If you find this firmware helpful, consider supporting future development:
 
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/Evil0ctopus)
 
-**Author:** Joshua Lorson ([@Evil0ctopus](https://github.com/Evil0ctopus))
+**Author:** Evil0ctopus
+
