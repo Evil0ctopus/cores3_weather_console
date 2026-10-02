@@ -12,7 +12,7 @@ class HourlyPage {
  public:
 	void begin(lv_obj_t* parent, ThemeManager& theme);
 	void applyTheme(ThemeManager& theme);
-	void update(const WeatherData& data);
+	void update(const WeatherData& data, bool imperial = false);
 
  private:
 	ThemeManager* theme_ = nullptr;

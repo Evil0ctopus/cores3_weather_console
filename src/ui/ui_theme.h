@@ -47,7 +47,7 @@ struct ThemeTypography {
 	int16_t bodyLineSpace = 6;
 	int16_t summaryLineSpace = 10;
 	uint16_t pageTitleZoom = 190;
-	uint16_t captionZoom = 128;
+	uint16_t captionZoom = 256;
 	uint16_t heroValueZoom = 300;
 	uint16_t heroSummaryZoom = 170;
 	uint16_t weeklyRowZoom = 125;
@@ -56,20 +56,20 @@ struct ThemeTypography {
 };
 
 struct ThemeSpacing {
-	uint16_t screenPadding = 12;
-	uint16_t cardPadding = 20;
-	uint16_t currentCardPadding = 22;
-	uint16_t cardAltPadding = 16;
-	uint16_t cardRadius = 24;
-	uint16_t cardAltRadius = 18;
-	uint16_t listRowGap = 12;
-	uint16_t weeklyListTop = 56;
-	uint16_t alertsListTop = 82;
-	uint16_t imageRadius = 18;
-	uint16_t chipPadX = 12;
-	uint16_t chipPadY = 6;
-	uint16_t iconChipPadX = 14;
-	uint16_t iconChipPadY = 8;
+	uint16_t screenPadding = 8;
+	uint16_t cardPadding = 10;
+	uint16_t currentCardPadding = 10;
+	uint16_t cardAltPadding = 8;
+	uint16_t cardRadius = 4;
+	uint16_t cardAltRadius = 4;
+	uint16_t listRowGap = 6;
+	uint16_t weeklyListTop = 44;
+	uint16_t alertsListTop = 58;
+	uint16_t imageRadius = 4;
+	uint16_t chipPadX = 8;
+	uint16_t chipPadY = 4;
+	uint16_t iconChipPadX = 8;
+	uint16_t iconChipPadY = 4;
 };
 
 struct ThemeAccentRules {
@@ -87,6 +87,7 @@ ThemeId theme_id_from_index(uint8_t index);
 void ui_apply_theme_lvgl(ThemeId id);
 void ui_theme_apply_to_root(lv_obj_t* root, ThemeId id);
 void ui_make_container_transparent(lv_obj_t* obj);
+void ui_label_set_text_if_changed(lv_obj_t* label, const char* text);
 
 /**
  * @brief Make an object completely transparent (all opacity layers).
@@ -102,6 +103,7 @@ void ui_make_container_transparent(lv_obj_t* obj);
  * Allows background images and content behind the object to show through.
  */
 void ui_make_transparent(lv_obj_t* obj);
+void ui_fit_scroll_body(lv_obj_t* body, lv_coord_t top);
 
 class ThemeManager {
  public:

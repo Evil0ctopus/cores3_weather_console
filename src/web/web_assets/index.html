@@ -22,6 +22,40 @@
         </div>
       </section>
 
+      <section class="remote-panel glass" aria-labelledby="remoteTitle">
+        <div class="remote-head">
+          <div>
+            <p class="eyebrow">USB-free device access</p>
+            <h2 id="remoteTitle">Live Device View</h2>
+          </div>
+          <span class="remote-status" id="remoteStatus" role="status">Waiting for device</span>
+        </div>
+        <div class="remote-layout">
+          <div class="remote-screen-wrap">
+            <div id="remotePlaceholder" class="remote-placeholder">WAITING FOR DEVICE SCREEN</div>
+            <img id="remoteScreen" class="remote-screen" alt="" draggable="false">
+          </div>
+          <div class="remote-controls">
+            <label class="field remote-page-field">
+              <span>Screen</span>
+              <select id="remotePage" aria-label="Device screen">
+                <option value="6">Home hub</option>
+                <option value="0">Current</option>
+                <option value="1">Hourly</option>
+                <option value="2">Daily</option>
+                <option value="3">Radar</option>
+                <option value="4">Alerts</option>
+                <option value="5">System</option>
+              </select>
+            </label>
+            <button class="secondary-button" id="remoteGoPage" type="button">Go to screen</button>
+            <button class="secondary-button" id="remoteSound" type="button">Test speaker</button>
+            <button class="secondary-button" id="remoteRefresh" type="button">Refresh view</button>
+            <label class="remote-auto"><input id="remoteAutoRefresh" type="checkbox" checked> Auto refresh</label>
+          </div>
+        </div>
+      </section>
+
       <section class="layout">
         <form id="settingsForm" class="panel glass">
           <div class="panel-head">
@@ -119,7 +153,7 @@
             <label class="field">
               <span>Theme</span>
               <select id="theme" name="theme">
-                <option value="pixel_storm">Pixel Storm</option>
+                <option value="pixel_storm">Neon Storm</option>
                 <option value="desert_calm">Desert Calm</option>
                 <option value="future_pulse">Future Pulse</option>
                 <option value="midnight_radar">Midnight Radar</option>

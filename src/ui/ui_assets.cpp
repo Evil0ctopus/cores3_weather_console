@@ -1,5 +1,6 @@
 #include "ui_assets.h"
 
+#include <new>
 #include <SPIFFS.h>
 
 namespace ui {
@@ -7,6 +8,64 @@ namespace ui {
 namespace {
 
 bool gStartupReportLogged = false;
+lv_fs_drv_t gSpiffsDriver;
+
+bool spiffsReady(lv_fs_drv_t* /*driver*/) {
+	return SPIFFS.totalBytes() > 0;
+}
+
+void* spiffsOpen(lv_fs_drv_t* /*driver*/, const char* path, lv_fs_mode_t mode) {
+	if (path == nullptr || (mode & LV_FS_MODE_RD) == 0) {
+		return nullptr;
+	}
+
+	File* file = new (std::nothrow) File(SPIFFS.open(path, FILE_READ));
+	if (file == nullptr || !*file) {
+		delete file;
+		return nullptr;
+	}
+	return file;
+}
+
+lv_fs_res_t spiffsClose(lv_fs_drv_t* /*driver*/, void* fileHandle) {
+	if (fileHandle == nullptr) {
+		return LV_FS_RES_INV_PARAM;
+	}
+	File* file = static_cast<File*>(fileHandle);
+	file->close();
+	delete file;
+	return LV_FS_RES_OK;
+}
+
+lv_fs_res_t spiffsRead(lv_fs_drv_t* /*driver*/, void* fileHandle, void* buffer, uint32_t bytesToRead, uint32_t* bytesRead) {
+	if (fileHandle == nullptr || buffer == nullptr || bytesRead == nullptr) {
+		return LV_FS_RES_INV_PARAM;
+	}
+	File* file = static_cast<File*>(fileHandle);
+	*bytesRead = static_cast<uint32_t>(file->read(static_cast<uint8_t*>(buffer), bytesToRead));
+	return LV_FS_RES_OK;
+}
+
+lv_fs_res_t spiffsSeek(lv_fs_drv_t* /*driver*/, void* fileHandle, uint32_t position, lv_fs_whence_t whence) {
+	if (fileHandle == nullptr) {
+		return LV_FS_RES_INV_PARAM;
+	}
+	SeekMode mode = SeekSet;
+	if (whence == LV_FS_SEEK_CUR) {
+		mode = SeekCur;
+	} else if (whence == LV_FS_SEEK_END) {
+		mode = SeekEnd;
+	}
+	return static_cast<File*>(fileHandle)->seek(position, mode) ? LV_FS_RES_OK : LV_FS_RES_UNKNOWN;
+}
+
+lv_fs_res_t spiffsTell(lv_fs_drv_t* /*driver*/, void* fileHandle, uint32_t* position) {
+	if (fileHandle == nullptr || position == nullptr) {
+		return LV_FS_RES_INV_PARAM;
+	}
+	*position = static_cast<uint32_t>(static_cast<File*>(fileHandle)->position());
+	return LV_FS_RES_OK;
+}
 
 const char* const kRequiredBackgrounds[] = {
 	"/backgrounds/current.png",
@@ -17,6 +76,24 @@ const char* const kRequiredBackgrounds[] = {
 };
 
 }  // namespace
+
+void ui_asset_init() {
+	static bool initialized = false;
+	if (initialized) {
+		return;
+	}
+
+	lv_fs_drv_init(&gSpiffsDriver);
+	gSpiffsDriver.letter = 'S';
+	gSpiffsDriver.ready_cb = spiffsReady;
+	gSpiffsDriver.open_cb = spiffsOpen;
+	gSpiffsDriver.close_cb = spiffsClose;
+	gSpiffsDriver.read_cb = spiffsRead;
+	gSpiffsDriver.seek_cb = spiffsSeek;
+	gSpiffsDriver.tell_cb = spiffsTell;
+	lv_fs_drv_register(&gSpiffsDriver);
+	initialized = true;
+}
 
 bool ui_asset_exists(const char* path) {
 	if (path == nullptr) {
@@ -44,6 +121,7 @@ AssetLoadResult ui_asset_load_png(lv_obj_t* imgObj, const char* path) {
 	
 	result.path = path;
 	Serial.printf("[ASSET] Loading PNG: path=%s\n", path);
+	const String lvglPath = String("S:") + path;
 
 	for (int attempt = 0; attempt < 2; ++attempt) {
 		if (!SPIFFS.exists(path)) {
@@ -60,7 +138,7 @@ AssetLoadResult ui_asset_load_png(lv_obj_t* imgObj, const char* path) {
 
 		lv_img_header_t header;
 		memset(&header, 0, sizeof(header));
-		const lv_res_t infoResult = lv_img_decoder_get_info(path, &header);
+		const lv_res_t infoResult = lv_img_decoder_get_info(lvglPath.c_str(), &header);
 		if (infoResult != LV_RES_OK) {
 			Serial.printf("[LVGL] ERROR: decoder probe failed for path=%s\n", path);
 			if (attempt == 0) {
@@ -73,7 +151,7 @@ AssetLoadResult ui_asset_load_png(lv_obj_t* imgObj, const char* path) {
 			return result;
 		}
 
-		lv_img_set_src(imgObj, path);
+		lv_img_set_src(imgObj, lvglPath.c_str());
 		const void* src = lv_img_get_src(imgObj);
 		if (src != nullptr) {
 			result.success = true;

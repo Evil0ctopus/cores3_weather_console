@@ -5,6 +5,11 @@
 #include <SPIFFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <esp_heap_caps.h>
+#include <memory>
+#include <string.h>
+
+#include "../system/device_remote.h"
 
 namespace web {
 namespace {
@@ -322,6 +327,84 @@ void registerRoutes(AsyncWebServer& server,
 	server.serveStatic("/web_assets/", SPIFFS, "/")
 		.setDefaultFile("index.html")
 		.setCacheControl("no-store, no-cache, must-revalidate, max-age=0");
+
+	server.on("/api/device/screen", HTTP_GET, [](AsyncWebServerRequest* request) {
+		size_t imageLength = 0;
+		uint8_t* image = app::device_remote_create_bmp(imageLength, true);
+		if (image == nullptr || imageLength == 0) {
+			if (image != nullptr) {
+				heap_caps_free(image);
+			}
+			sendError(request, "Device screen capture is unavailable.", 503);
+			return;
+		}
+
+		std::shared_ptr<uint8_t> imageOwner(image, [](uint8_t* data) { heap_caps_free(data); });
+		AsyncWebServerResponse* response = request->beginResponse(
+			"image/bmp", imageLength,
+			[imageOwner, imageLength](uint8_t* buffer, size_t maxLength, size_t index) {
+				if (index >= imageLength) {
+					return static_cast<size_t>(0);
+				}
+				const size_t bytesToCopy = (imageLength - index) < maxLength ? (imageLength - index) : maxLength;
+				memcpy(buffer, imageOwner.get() + index, bytesToCopy);
+				return bytesToCopy;
+			});
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		request->send(response);
+	});
+
+	server.on("/api/device/control", HTTP_POST, [](AsyncWebServerRequest* request) {
+		if (!request->hasParam("action", true)) {
+			sendError(request, "Control action is required.", 400);
+			return;
+		}
+
+		const String action = request->getParam("action", true)->value();
+		app::DeviceRemoteCommand command;
+		if (action == "page") {
+			if (!request->hasParam("page", true)) {
+				sendError(request, "Page index is required.", 400);
+				return;
+			}
+			const int page = request->getParam("page", true)->value().toInt();
+			if (page < 0 || page > 6) {
+				sendError(request, "Page index must be between 0 and 6.", 400);
+				return;
+			}
+			command.type = app::DeviceRemoteCommandType::Page;
+			command.value = static_cast<uint8_t>(page);
+		} else if (action == "touch") {
+			if (!request->hasParam("x", true) || !request->hasParam("y", true) || !request->hasParam("state", true)) {
+				sendError(request, "Touch x, y, and state are required.", 400);
+				return;
+			}
+			const int x = request->getParam("x", true)->value().toInt();
+			const int y = request->getParam("y", true)->value().toInt();
+			const String state = request->getParam("state", true)->value();
+			if (x < 0 || x >= 320 || y < 0 || y >= 240 || (state != "down" && state != "up")) {
+				sendError(request, "Touch coordinates or state are invalid.", 400);
+				return;
+			}
+			command.type = app::DeviceRemoteCommandType::Touch;
+			command.x = static_cast<int16_t>(x);
+			command.y = static_cast<int16_t>(y);
+			command.pressed = state == "down";
+		} else if (action == "sound") {
+			command.type = app::DeviceRemoteCommandType::Sound;
+		} else {
+			sendError(request, "Unknown control action.", 400);
+			return;
+		}
+
+		if (!app::device_remote_enqueue(command)) {
+			sendError(request, "Device control queue is unavailable or full.", 503);
+			return;
+		}
+		JsonDocument doc;
+		doc["accepted"] = true;
+		sendJson(request, doc, 202);
+	});
 
 	server.on("/api/settings", HTTP_GET, [&settingsStore, themeProvider, themeProviderContext](AsyncWebServerRequest* request) {
 		JsonDocument doc;

@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <SPIFFS.h>
+#include <string.h>
 
 namespace ui {
 namespace {
@@ -12,6 +13,7 @@ ThemePalette gPalette = {};
 ThemeTypography gTypography = {};
 ThemeSpacing gSpacing = {};
 ThemeAccentRules gAccentRules = {};
+bool gCinematic = false;
 
 bool gStylesInitialized = false;
 lv_style_t gScreenStyle;
@@ -58,8 +60,13 @@ bool useLightText(uint32_t color) {
 
 void rebuildThemeState(ThemeId id) {
 	gThemeColors = get_theme_colors(id);
+	gCinematic = id == ThemeId::PIXEL_STORM;
 	gTypography = ThemeTypography();
 	gSpacing = ThemeSpacing();
+	if (gCinematic) {
+		gSpacing.cardRadius = 12;
+		gSpacing.cardAltRadius = 12;
+	}
 
 	gPalette.bg = hexColor(gThemeColors.bg_main);
 	gPalette.surface = hexColor(gThemeColors.bg_card);
@@ -92,10 +99,11 @@ void rebuildStyles() {
 
 	lv_style_reset(&gCardStyle);
 	lv_style_set_radius(&gCardStyle, gSpacing.cardRadius);
-	lv_style_set_bg_opa(&gCardStyle, LV_OPA_COVER);
+	lv_style_set_bg_opa(&gCardStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
 	lv_style_set_bg_color(&gCardStyle, hexColor(gThemeColors.bg_card));
 	lv_style_set_border_width(&gCardStyle, 1);
 	lv_style_set_border_color(&gCardStyle, hexColor(gThemeColors.border_soft));
+	lv_style_set_border_opa(&gCardStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
 	lv_style_set_pad_all(&gCardStyle, gSpacing.cardPadding);
 	lv_style_set_shadow_opa(&gCardStyle, LV_OPA_TRANSP);
 	lv_style_set_shadow_width(&gCardStyle, 0);
@@ -103,10 +111,15 @@ void rebuildStyles() {
 
 	lv_style_reset(&gCardAltStyle);
 	lv_style_set_radius(&gCardAltStyle, gSpacing.cardAltRadius);
-	lv_style_set_bg_opa(&gCardAltStyle, LV_OPA_COVER);
+	lv_style_set_bg_opa(&gCardAltStyle, gCinematic ? LV_OPA_80 : LV_OPA_COVER);
 	lv_style_set_bg_color(&gCardAltStyle, mixColor(gThemeColors.bg_card, gThemeColors.bg_tab, LV_OPA_60));
+	if (gCinematic) {
+		lv_style_set_bg_grad_color(&gCardAltStyle, hexColor(gThemeColors.bg_tab));
+		lv_style_set_bg_grad_dir(&gCardAltStyle, LV_GRAD_DIR_VER);
+	}
 	lv_style_set_border_width(&gCardAltStyle, 1);
 	lv_style_set_border_color(&gCardAltStyle, hexColor(gThemeColors.border_soft));
+	lv_style_set_border_opa(&gCardAltStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
 	lv_style_set_pad_all(&gCardAltStyle, gSpacing.cardAltPadding);
 	lv_style_set_shadow_opa(&gCardAltStyle, LV_OPA_TRANSP);
 	lv_style_set_shadow_width(&gCardAltStyle, 0);
@@ -149,7 +162,7 @@ void rebuildStyles() {
 ThemeColors get_theme_colors(ThemeId id) {
 	switch (id) {
 		case ThemeId::PIXEL_STORM:
-			return ThemeColors{0x050816, 0x0b1020, 0x050816, 0xffb347, 0x4fd1ff, 0xff5c5c, 0xf5f7ff, 0xa3b0d0, 0x1a2238};
+			return ThemeColors{0x040816, 0x0b1730, 0x171b38, 0x73dfff, 0xaa91ed, 0xffba62, 0xf0f7ff, 0xbccae8, 0x44648b};
 		case ThemeId::DESERT_CALM:
 			return ThemeColors{0xf7f1e8, 0xf0e3d2, 0xf7f1e8, 0xd47b4a, 0xb89b6d, 0xc0392b, 0x2f2418, 0x7a6a55, 0xe0d2c0};
 		case ThemeId::FUTURE_PULSE:
@@ -175,7 +188,7 @@ ThemeColors get_theme_colors(ThemeId id) {
 const char* theme_id_to_name(ThemeId id) {
 	switch (id) {
 		case ThemeId::PIXEL_STORM:
-			return "Pixel Storm";
+			return "Neon Storm";
 		case ThemeId::DESERT_CALM:
 			return "Desert Calm";
 		case ThemeId::FUTURE_PULSE:
@@ -195,7 +208,7 @@ const char* theme_id_to_name(ThemeId id) {
 		case ThemeId::INFRARED_SCAN:
 			return "Infrared Scan";
 	}
-	return "Pixel Storm";
+	return "Neon Storm";
 }
 
 const char* theme_id_to_storage_key(ThemeId id) {
@@ -228,6 +241,10 @@ bool parse_theme_id(const String& value, ThemeId& out) {
 	String normalizedValue = value;
 	normalizedValue.trim();
 	normalizedValue.toLowerCase();
+	if (normalizedValue == "pixel_storm") {
+		out = ThemeId::PIXEL_STORM;
+		return true;
+	}
 	for (uint8_t index = 0; index < theme_count(); ++index) {
 		const ThemeId candidate = theme_id_from_index(index);
 		String storageKey = String(theme_id_to_storage_key(candidate));
@@ -276,6 +293,12 @@ void ui_theme_apply_to_root(lv_obj_t* root, ThemeId id) {
 	lv_obj_invalidate(root);
 }
 
+void ui_label_set_text_if_changed(lv_obj_t* label, const char* text) {
+	if (strcmp(lv_label_get_text(label), text) != 0) {
+		lv_label_set_text(label, text);
+	}
+}
+
 void ui_make_container_transparent(lv_obj_t* obj) {
 	if (obj == nullptr) {
 		Serial.println("[UI] ERROR: ui_make_container_transparent received null object.");
@@ -298,6 +321,21 @@ void ui_make_transparent(lv_obj_t* obj) {
 	lv_obj_set_style_outline_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
 	Serial.println("[UI] Transparency applied");
+}
+
+void ui_fit_scroll_body(lv_obj_t* body, lv_coord_t top) {
+	if (body == nullptr || lv_obj_get_parent(body) == nullptr) {
+		Serial.println("[UI] ERROR: scroll body requires a parent.");
+		return;
+	}
+	lv_obj_t* parent = lv_obj_get_parent(body);
+	lv_obj_update_layout(parent);
+	const lv_coord_t height = lv_obj_get_content_height(parent) - top;
+	if (height <= 0) {
+		Serial.println("[UI] ERROR: scroll body has no available height.");
+		return;
+	}
+	lv_obj_set_height(body, height);
 }
 
 void ui_style_card(lv_obj_t* obj, const ThemeManager& theme) {

@@ -21,6 +21,8 @@ struct AssetLoadResult {
 	String error;          /// Error message if fallback was used
 };
 
+void ui_asset_init();
+
 /**
  * @brief Load and display a PNG image from SPIFFS into an lv_img object.
  * 

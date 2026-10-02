@@ -3,12 +3,15 @@
 #include <WiFi.h>
 #include <lvgl.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 #include <time.h>
+#include <atomic>
 
 #include "generated_git_version.h"
 #include "audio/audio_engine.h"
 #include "led/led_engine.h"
 #include "system/debug_log.h"
+#include "system/device_remote.h"
 #include "system/settings.h"
 #include "system/time_manager.h"
 #include "system/wifi_manager.h"
@@ -28,12 +31,35 @@ app::DebugLog gDebugLog;
 // ---------------------------------------------------------------------------
 namespace {
 
-// Draw buffer: 20 rows of 320 pixels at 16-bit colour = 12.5 KB
-static lv_color_t sLvglBuf[320 * 20];
+bool gRemoteTouchPressed = false;
+int16_t gRemoteTouchX = 0;
+int16_t gRemoteTouchY = 0;
+lv_timer_t* gTouchReadTimer = nullptr;
+uint32_t gFlushPixels = 0;
+uint32_t gFlushCalls = 0;
+uint32_t gLastFlushPixels = 0;
+uint32_t gLastFlushCalls = 0;
+uint32_t gLastAudioMs = 0;
+uint32_t gPaintGeneration = 0;
+uint8_t gPaintedPage = 0xFF;
+
+// Sixty internal-RAM rows limit traversal/flush overhead without a full framebuffer.
+static lv_color_t sLvglBuf[320 * 60];
 
 static void LvglDisplayFlush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
+  static bool firstFlushLogged = false;
   const int32_t w = area->x2 - area->x1 + 1;
   const int32_t h = area->y2 - area->y1 + 1;
+  gFlushPixels += static_cast<uint32_t>(w * h);
+  ++gFlushCalls;
+  if (!firstFlushLogged) {
+    firstFlushLogged = true;
+    Serial.printf("[UI] First display flush: %ld,%ld %ldx%ld color=%04X\n",
+                  static_cast<long>(area->x1), static_cast<long>(area->y1),
+                  static_cast<long>(w), static_cast<long>(h),
+                  static_cast<unsigned>(reinterpret_cast<uint16_t*>(color_p)[0]));
+  }
+  app::device_remote_capture(area, color_p);
   M5.Display.startWrite();
   M5.Display.pushImage(area->x1, area->y1, w, h, reinterpret_cast<uint16_t*>(color_p));
   M5.Display.endWrite();
@@ -41,9 +67,35 @@ static void LvglDisplayFlush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color
 }
 
 static void LvglTouchRead(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
+  app::DeviceRemoteCommand command;
+  if (app::device_remote_peek_command(command) &&
+      command.type == app::DeviceRemoteCommandType::Touch &&
+      app::device_remote_take_command(command)) {
+    gRemoteTouchX = command.x;
+    gRemoteTouchY = command.y;
+    gRemoteTouchPressed = command.pressed;
+    data->state = command.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    data->point.x = command.x;
+    data->point.y = command.y;
+    // Deliver both edges of a quick tap even when they arrive in one loop.
+    data->continue_reading = app::device_remote_peek_command(command) &&
+        command.type == app::DeviceRemoteCommandType::Touch;
+    return;
+  }
+  if (gRemoteTouchPressed) {
+    data->state = LV_INDEV_STATE_PRESSED;
+    data->point.x = gRemoteTouchX;
+    data->point.y = gRemoteTouchY;
+    return;
+  }
   if (M5.Touch.getCount() > 0) {
     const auto& t = M5.Touch.getDetail(0);
-    data->state = LV_INDEV_STATE_PRESSED;
+    if (t.wasPressed() || t.wasReleased()) {
+      Serial.printf("[TOUCH] physical state=%u pressed=%u x=%d y=%d count=%u\n",
+                    static_cast<unsigned>(t.state), t.isPressed() ? 1U : 0U,
+                    t.x, t.y, static_cast<unsigned>(M5.Touch.getCount()));
+    }
+    data->state = t.isPressed() ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     data->point.x = t.x;
     data->point.y = t.y;
   } else {
@@ -55,9 +107,10 @@ void InitializeLvgl() {
   Serial.println("[UI] InitializeLvgl() start");
   lv_init();
   Serial.println("[UI] lv_init() complete");
+  ui::ui_asset_init();
 
   static lv_disp_draw_buf_t drawBuf;
-  lv_disp_draw_buf_init(&drawBuf, sLvglBuf, nullptr, 320 * 20);
+  lv_disp_draw_buf_init(&drawBuf, sLvglBuf, nullptr, 320 * 60);
   Serial.println("[UI] LVGL draw buffer initialized");
 
   static lv_disp_drv_t dispDrv;
@@ -73,7 +126,14 @@ void InitializeLvgl() {
   lv_indev_drv_init(&indevDrv);
   indevDrv.type = LV_INDEV_TYPE_POINTER;
   indevDrv.read_cb = LvglTouchRead;
-  lv_indev_drv_register(&indevDrv);
+  lv_indev_t* touchInput = lv_indev_drv_register(&indevDrv);
+  if (touchInput == nullptr) {
+    Serial.println("[UI] ERROR: LVGL input driver registration failed");
+    return;
+  }
+  // Read immediately after M5.update(), not on a separate polling schedule.
+  gTouchReadTimer = touchInput->driver->read_timer;
+  lv_timer_pause(gTouchReadTimer);
   Serial.println("[UI] LVGL input driver registered");
 }
 
@@ -95,16 +155,27 @@ app::TimeManager gTime;
 web::WebServerHost gWebServer;
 
 bool gMainUiStarted = false;
+bool gRemoteFramebufferReady = false;
 bool gLedEngineInitialized = false;
 bool gLastWifiConnected = false;
 bool gLastErrorState = false;
+String gLastAlertSignature;
 uint8_t gLastPageIndex = 0xFF;
 uint32_t gLastBootWhooshMs = 0;
+uint32_t gLastUiContentUpdateMs = 0;
 size_t gLastRadarCompletedFrames = 0;
 uint32_t gLastSettingsRevision = 0;
+std::atomic<bool> gSettingsApplyPending{false};
+weather::WeatherApiConfig gAppliedWeatherConfig;
+uint32_t gLastLoopMs = 0;
+uint32_t gLastInputMs = 0;
+uint32_t gLastNetworkMs = 0;
+uint32_t gLastContentMs = 0;
+uint32_t gLastRenderMs = 0;
 
 constexpr uint8_t kSystemInfoPageIndex = 5;
 constexpr uint32_t kBootWhooshIntervalMs = 2200;
+constexpr uint32_t kUiContentUpdateIntervalMs = 100;
 
 ui::ThemeId CurrentThemeProvider(void* userContext) {
   (void)userContext;
@@ -232,26 +303,33 @@ void OnLedEvent(void* userContext, const char* eventName, const String& details)
   if (eventName == nullptr) {
     return;
   }
-  if (strcmp(eventName, "alert") == 0) {
-    gAudioEngine.onLedAlert(1);
-  }
   gDebugLog.log("led", String(eventName) + (details.length() ? String(" ") + details : String()));
 }
 
 void OnSettingsSaved(void* userContext, const app::AppSettings& settings) {
   (void)userContext;
+  (void)settings;
+  gSettingsApplyPending.store(true);
+}
+
+void ApplySavedSettings(const app::AppSettings& settings) {
   weather::WeatherApiConfig apiCfg;
   apiCfg.apiKey = settings.apiKey;
   apiCfg.locationQuery = settings.locationQuery;
   apiCfg.locationKey = settings.locationKey;
-  apiCfg.useMetric = (settings.units == app::UnitsSystem::Metric);
+  apiCfg.useMetric = true;
   apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
-  gWeatherApi.begin(apiCfg);
-  gWeatherApi.requestRefresh();
-  gRadarEngine.reset();
-  if (gMainUiStarted) {
+  if (apiCfg.apiKey != gAppliedWeatherConfig.apiKey ||
+      apiCfg.locationQuery != gAppliedWeatherConfig.locationQuery ||
+      apiCfg.locationKey != gAppliedWeatherConfig.locationKey) {
+    gAppliedWeatherConfig = apiCfg;
+    gWeatherApi.begin(apiCfg);
+    gWeatherApi.requestRefresh();
+    gRadarEngine.reset();
+  }
+  if (gMainUiStarted && gUi.themeId() != settings.theme) {
     gUi.setTheme(settings.theme);
-  } else {
+  } else if (!gMainUiStarted) {
     gBootTheme.setTheme(settings.theme);
   }
   gAudioEngine.playSystemSound(audio::SystemSound::SettingsSavedTone);
@@ -271,31 +349,13 @@ void InitializeLedEngineAfterBoot() {
 }
 
 void UpdateTouchFeedback() {
-  static bool wasTouchActive = false;
-  static bool swipeHandled = false;
-  static int lastDx = 0;
-  static int lastDy = 0;
-
   if (M5.Touch.getCount() == 0) {
-    if (wasTouchActive) {
-      if (!swipeHandled && abs(lastDx) >= 24 && abs(lastDx) > abs(lastDy) + 6) {
-        gUi.moveToAdjacentPage(lastDx < 0 ? 1 : -1, true);
-        gLedEngine.touchEvent(lastDx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, lastDx, lastDy);
-        gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
-      }
-      gUi.recenterActivePage(true);
-    }
-    wasTouchActive = false;
-    swipeHandled = false;
-    lastDx = 0;
-    lastDy = 0;
     return;
   }
 
-  wasTouchActive = true;
   const m5::Touch_Class::touch_detail_t& detail = M5.Touch.getDetail(0);
-  lastDx = detail.distanceX();
-  lastDy = detail.distanceY();
+  const int lastDx = detail.distanceX();
+  const int lastDy = detail.distanceY();
 
   if (detail.wasClicked()) {
     gLedEngine.touchEvent(led::LedEngine::TouchKind::Tap, lastDx, lastDy);
@@ -306,14 +366,6 @@ void UpdateTouchFeedback() {
   if (detail.wasHold()) {
     gLedEngine.touchEvent(led::LedEngine::TouchKind::LongPress, lastDx, lastDy);
     gAudioEngine.playTouchSound(audio::TouchSound::LongPressRise);
-    return;
-  }
-
-  if (!swipeHandled && abs(lastDx) >= 32 && abs(lastDx) > abs(lastDy) + 6) {
-    gUi.moveToAdjacentPage(lastDx < 0 ? 1 : -1, true);
-    gLedEngine.touchEvent(lastDx >= 0 ? led::LedEngine::TouchKind::SwipeRight : led::LedEngine::TouchKind::SwipeLeft, lastDx, lastDy);
-    gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
-    swipeHandled = true;
     return;
   }
 
@@ -328,10 +380,18 @@ void UpdateTouchFeedback() {
 void UpdateAlertFeedback(const WeatherData& data) {
   if (data.alertCount == 0) {
     gLedEngine.clearAlert();
+    gLastAlertSignature = "";
     return;
   }
 
-  const String severity = data.alerts[0].severity;
+  const WeatherAlert& alert = data.alerts[0];
+  const String severity = alert.severity;
+  String signature = alert.id + "|" + severity + "|" + alert.title + "|" + String(alert.onsetEpoch) + "|" + alert.description;
+  if (signature == gLastAlertSignature) {
+    return;
+  }
+  gLastAlertSignature = signature;
+
   String lower = severity;
   lower.toLowerCase();
 
@@ -342,13 +402,203 @@ void UpdateAlertFeedback(const WeatherData& data) {
   }
 
   if (lower.indexOf("flood") >= 0) {
-    gLedEngine.alert(led::LedEngine::AlertLevel::Warning, severity);
+    gLedEngine.alert(led::LedEngine::AlertLevel::Warning, severity, 0xFFFFFFFFUL);
     gAudioEngine.playAlertSound(audio::AlertSound::FloodWarning);
     return;
   }
 
-  gLedEngine.alert(led::LedEngine::AlertLevel::Warning, severity);
+  gLedEngine.alert(led::LedEngine::AlertLevel::Warning, severity, 0xFFFFFFFFUL);
   gAudioEngine.playAlertSound(audio::AlertSound::SevereWeather);
+}
+
+void ProcessRemoteCommands() {
+  app::DeviceRemoteCommand command;
+  while (app::device_remote_peek_command(command)) {
+    if (command.type == app::DeviceRemoteCommandType::Touch) {
+      break;
+    }
+    if (!app::device_remote_take_command(command)) {
+      break;
+    }
+    switch (command.type) {
+      case app::DeviceRemoteCommandType::Page:
+        if (!gMainUiStarted || command.value > 6) {
+          break;
+        }
+        if (command.value == 6) {
+          gUi.showHome();
+        } else {
+          gUi.openPage(command.value, true);
+        }
+        break;
+      case app::DeviceRemoteCommandType::Touch:
+        break;
+      case app::DeviceRemoteCommandType::Sound:
+        gAudioEngine.playBootSound(audio::BootSound::Ready);
+        break;
+    }
+  }
+}
+
+void PrintLabelLayout(lv_obj_t* object) {
+  if (lv_obj_has_flag(object, LV_OBJ_FLAG_HIDDEN)) {
+    return;
+  }
+  if (lv_obj_check_type(object, &lv_label_class)) {
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    Serial.printf("[LAYOUT] %d,%d %dx%d zoom=%d text=%s\n",
+                  area.x1, area.y1, lv_area_get_width(&area), lv_area_get_height(&area),
+                  lv_obj_get_style_transform_zoom(object, LV_PART_MAIN), lv_label_get_text(object));
+  }
+  for (uint32_t index = 0; index < lv_obj_get_child_cnt(object); ++index) {
+    PrintLabelLayout(lv_obj_get_child(object, index));
+  }
+}
+
+void ProcessSerialCaptureCommand() {
+  static char commandBuffer[512] = {};
+  static size_t commandLength = 0;
+  static bool commandOverflow = false;
+
+  while (Serial.available() > 0) {
+    const char character = static_cast<char>(Serial.read());
+    if (character == '\r') {
+      continue;
+    }
+    if (character != '\n') {
+      if (commandLength < sizeof(commandBuffer) - 1) {
+        commandBuffer[commandLength++] = character;
+      } else {
+        commandOverflow = true;
+      }
+      continue;
+    }
+
+    commandBuffer[commandLength] = '\0';
+    if (commandOverflow) {
+      Serial.println("CONTROL_ERROR command too long");
+    } else if (strcmp(commandBuffer, "RESTART") == 0) {
+      Serial.println("CONTROL_OK restarting");
+      Serial.flush();
+      ESP.restart();
+    } else if (strcmp(commandBuffer, "WIFI_SCAN") == 0) {
+      Serial.println(gWifi.startScan() ? "CONTROL_OK scan started" : "CONTROL_ERROR scan could not start");
+    } else if (strcmp(commandBuffer, "WIFI_NETWORKS") == 0) {
+      app::WifiNetworkInfo networks[app::WifiManager::kMaxScanResults];
+      const size_t count = gWifi.scanNetworks(networks, app::WifiManager::kMaxScanResults);
+      JsonDocument results;
+      results["inProgress"] = gWifi.scanInProgress();
+      JsonArray items = results["networks"].to<JsonArray>();
+      for (size_t index = 0; index < count; ++index) {
+        JsonObject item = items.add<JsonObject>();
+        item["ssid"] = networks[index].ssid;
+        item["rssi"] = networks[index].rssi;
+      }
+      Serial.print("WIFI_NETWORKS ");
+      serializeJson(results, Serial);
+      Serial.println();
+    } else if (strncmp(commandBuffer, "WIFI ", 5) == 0) {
+      JsonDocument credentials;
+      const DeserializationError error = deserializeJson(credentials, commandBuffer + 5);
+      if (error || !credentials["ssid"].is<const char*>() ||
+          !credentials["password"].is<const char*>()) {
+        Serial.println("CONTROL_ERROR WIFI requires JSON string fields ssid and password");
+      } else {
+        app::WifiConfig config = gWifi.config();
+        config.ssid = credentials["ssid"].as<String>();
+        config.ssid.trim();
+        config.password = credentials["password"].as<String>();
+        config.autoConnect = true;
+        if (config.ssid.length() == 0 || config.ssid.length() > 32 ||
+            (config.password.length() != 0 &&
+             (config.password.length() < 8 || config.password.length() > 63))) {
+          Serial.println("CONTROL_ERROR invalid WiFi credential lengths");
+        } else if (!gSettings.saveWifiSettings(config.ssid, config.password, true)) {
+          Serial.println("CONTROL_ERROR could not persist WiFi settings");
+        } else if (!gWifi.applyConfig(config, true, true)) {
+          Serial.println("CONTROL_ERROR could not apply WiFi configuration");
+        } else {
+          Serial.println("CONTROL_OK WiFi connection started");
+        }
+      }
+    } else if (strcmp(commandBuffer, "SCREEN_BMP") == 0) {
+      size_t imageLength = 0;
+      uint8_t* image = app::device_remote_create_bmp(imageLength);
+      if (image == nullptr || imageLength == 0) {
+        Serial.println("SCREEN_ERROR");
+        if (image != nullptr) {
+          heap_caps_free(image);
+        }
+      } else {
+        Serial.printf("SCREEN_BMP %u %lu\n", static_cast<unsigned>(imageLength),
+                static_cast<unsigned long>(app::device_remote_frame_count()));
+        Serial.flush();
+        size_t sent = 0;
+        while (sent < imageLength) {
+          sent += Serial.write(image + sent, imageLength - sent);
+        }
+        Serial.flush();
+        heap_caps_free(image);
+      }
+    } else if (strcmp(commandBuffer, "UI_LABELS") == 0) {
+      PrintLabelLayout(lv_scr_act());
+      Serial.println("LAYOUT_END");
+    } else if (strcmp(commandBuffer, "STATUS") == 0) {
+      const app::WifiStatusInfo wifi = gWifi.statusInfo();
+      Serial.printf("DEVICE_STATUS ready=%u page=%u ip=%s ap=%s heap=%u psram=%u loop=%u input=%u network=%u content=%u render=%u theme=%u audio=%u speaker=%u pixels=%u flushes=%u audio_ms=%u painted_page=%u paint=%u\n",
+                    gMainUiStarted ? 1U : 0U, static_cast<unsigned>(gUi.activePageIndex()),
+                    wifi.ipAddress.c_str(), wifi.accessPointIpAddress.c_str(),
+                    static_cast<unsigned>(ESP.getFreeHeap()),
+                    static_cast<unsigned>(ESP.getFreePsram()),
+                    static_cast<unsigned>(gLastLoopMs), static_cast<unsigned>(gLastInputMs),
+                    static_cast<unsigned>(gLastNetworkMs), static_cast<unsigned>(gLastContentMs),
+                    static_cast<unsigned>(gLastRenderMs),
+                    static_cast<unsigned>(gSettings.get_theme()), gAudioEngine.isPlaying() ? 1U : 0U,
+                    M5.Speaker.isPlaying() ? 1U : 0U,
+                    static_cast<unsigned>(gLastFlushPixels), static_cast<unsigned>(gLastFlushCalls),
+                    static_cast<unsigned>(gLastAudioMs), static_cast<unsigned>(gPaintedPage),
+                    static_cast<unsigned>(gPaintGeneration));
+    } else if (strcmp(commandBuffer, "SOUND") == 0 || strncmp(commandBuffer, "PAGE ", 5) == 0 ||
+               strncmp(commandBuffer, "TOUCH ", 6) == 0) {
+      app::DeviceRemoteCommand command;
+      int page = -1;
+      int x = -1;
+      int y = -1;
+      int pressed = -1;
+      int consumed = 0;
+      bool valid = false;
+      if (strcmp(commandBuffer, "SOUND") == 0) {
+        command.type = app::DeviceRemoteCommandType::Sound;
+        valid = true;
+      } else if (sscanf(commandBuffer, "PAGE %d%n", &page, &consumed) == 1 &&
+                 commandBuffer[consumed] == '\0' && page >= 0 && page <= 6) {
+        command.type = app::DeviceRemoteCommandType::Page;
+        command.value = static_cast<uint8_t>(page);
+        valid = gMainUiStarted;
+      } else if (sscanf(commandBuffer, "TOUCH %d %d %d%n", &x, &y, &pressed, &consumed) == 3 &&
+                 commandBuffer[consumed] == '\0' && x >= 0 && x < 320 && y >= 0 && y < 240 &&
+                 (pressed == 0 || pressed == 1)) {
+        command.type = app::DeviceRemoteCommandType::Touch;
+        command.x = static_cast<int16_t>(x);
+        command.y = static_cast<int16_t>(y);
+        command.pressed = pressed == 1;
+        valid = gMainUiStarted;
+      }
+      if (!valid) {
+        Serial.println("CONTROL_ERROR invalid command or UI not ready");
+      } else if (!app::device_remote_enqueue(command)) {
+        Serial.println("CONTROL_ERROR queue unavailable or full");
+      } else {
+        Serial.println("CONTROL_OK");
+      }
+    } else if (commandLength > 0) {
+      Serial.println("CONTROL_ERROR unknown command");
+    }
+    commandLength = 0;
+    commandOverflow = false;
+    memset(commandBuffer, 0, sizeof(commandBuffer));
+  }
 }
 
 void OnRadarProgress(void* /*userContext*/, const weather::RadarProgress& progress) {
@@ -449,6 +699,12 @@ void InitializeSubsystems() {
   wifiCfg.autoConnect = gSettings.settings().wifiAutoConnect;
   gWifi.begin(wifiCfg);
   gLastWifiConnected = gWifi.connected();
+  const app::WifiStatusInfo startupWifiInfo = gWifi.statusInfo();
+  Serial.printf("[REMOTE] WiFi=%s IP=%s setupSSID=%s setupIP=%s\n",
+                startupWifiInfo.statusText.c_str(),
+                startupWifiInfo.ipAddress.c_str(),
+                startupWifiInfo.accessPointSsid.c_str(),
+                startupWifiInfo.accessPointIpAddress.c_str());
 
   gTime.begin();
 
@@ -476,9 +732,10 @@ void InitializeSubsystems() {
   apiCfg.apiKey = gSettings.settings().apiKey;
   apiCfg.locationQuery = gSettings.settings().locationQuery;
   apiCfg.locationKey = gSettings.settings().locationKey;
-  apiCfg.useMetric = (gSettings.settings().units == app::UnitsSystem::Metric);
+  apiCfg.useMetric = true;
   apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
   gWeatherApi.begin(apiCfg);
+  gAppliedWeatherConfig = apiCfg;
 
   gRadarEngine.begin();
   gRadarEngine.setProgressCallback(OnRadarProgress, nullptr);
@@ -506,6 +763,8 @@ void setup() {
   cfg.internal_mic = true;
   cfg.led_brightness = 0;
   M5.begin(cfg);
+  gRemoteFramebufferReady = app::device_remote_begin();
+  Serial.printf("[REMOTE] framebuffer=%s\n", gRemoteFramebufferReady ? "ready" : "unavailable");
   Serial.println("[UI] M5.begin() complete");
 
   if (M5.Display.width() < M5.Display.height()) {
@@ -519,7 +778,14 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t loopStarted = millis();
   M5.update();
+  gLastInputMs = millis() - loopStarted;
+  ProcessRemoteCommands();
+  ProcessSerialCaptureCommand();
+  if (gTouchReadTimer != nullptr) {
+    lv_indev_read_timer_cb(gTouchReadTimer);
+  }
 
   if (!gMainUiStarted) {
     if (ui::ui_boot_anim_finished(gBootAnimObj)) {
@@ -544,6 +810,10 @@ void loop() {
     }
   }
 
+  const uint32_t networkStarted = millis();
+  if (gSettingsApplyPending.exchange(false)) {
+    ApplySavedSettings(gSettings.settings());
+  }
   gWifi.update();
   gTime.update(gWifi.connected());
   gWeatherApi.update();
@@ -553,34 +823,40 @@ void loop() {
     gLedEngine.progress(0, false);
   }
   gWebServer.tick();
+  gLastNetworkMs = millis() - networkStarted;
 
+  const uint32_t contentStarted = millis();
   UpdateTouchFeedback();
   UpdateSystemEventAudio();
 
   const WeatherData& weatherData = gWeatherApi.data();
+  const uint32_t uiNowMs = millis();
+  if ((uiNowMs - gLastUiContentUpdateMs) >= kUiContentUpdateIntervalMs ||
+      gUi.activePageIndex() != gLastPageIndex) {
+    gLastUiContentUpdateMs = uiNowMs;
+    ui::SystemInfo systemInfo;
+    const app::WifiStatusInfo wifiInfo = gWifi.statusInfo();
+    const String primaryIp = wifiInfo.ipAddress.length() > 0 ? wifiInfo.ipAddress : wifiInfo.accessPointIpAddress;
+    systemInfo.wifiConnected = wifiInfo.connected;
+    systemInfo.wifiSignalBars = WifiSignalBars(wifiInfo.connected, wifiInfo.rssi);
+    systemInfo.batteryPct = ClampBatteryPercent(M5.Power.getBatteryLevel());
+    systemInfo.batteryCharging = static_cast<bool>(M5.Power.isCharging());
+    systemInfo.currentTime = FormatCurrentClock(weatherData);
+    systemInfo.ipAddress = primaryIp;
+    systemInfo.webUiUrl = primaryIp.length() > 0 ? String("http://") + primaryIp + ":80" : String();
+    systemInfo.wifiSsid = wifiInfo.connected ? wifiInfo.ssid : (wifiInfo.accessPointSsid.length() > 0 ? wifiInfo.accessPointSsid : wifiInfo.ssid);
+    systemInfo.wifiRssi = wifiInfo.connected ? String(wifiInfo.rssi) + " dBm" : String();
+    systemInfo.wifiStatus = wifiInfo.statusText;
+    systemInfo.weatherStatus = weatherData.lastErrorMessage.length() > 0 ? weatherData.lastErrorMessage : String(weatherData.current.valid ? "Ready" : "Waiting for first update");
+    systemInfo.radarStatus = gRadarEngine.lastErrorMessage().length() > 0 ? gRadarEngine.lastErrorMessage() : String(gRadarEngine.frameCount() > 0 ? "Ready" : "Waiting for radar frames");
+    systemInfo.lastUpdate = FormatRelativeAge(weatherData.lastCycleAtMs);
+    systemInfo.spiffsUsage = FormatSpiffsUsage();
+    systemInfo.firmwareVersion = APP_GIT_VERSION;
+    systemInfo.ledMode = gLedEngine.statusLabel();
 
-  ui::SystemInfo systemInfo;
-  const app::WifiStatusInfo wifiInfo = gWifi.statusInfo();
-  const String primaryIp = wifiInfo.ipAddress.length() > 0 ? wifiInfo.ipAddress : wifiInfo.accessPointIpAddress;
-  systemInfo.wifiConnected = wifiInfo.connected;
-  systemInfo.wifiSignalBars = WifiSignalBars(wifiInfo.connected, wifiInfo.rssi);
-  systemInfo.batteryPct = ClampBatteryPercent(M5.Power.getBatteryLevel());
-  systemInfo.batteryCharging = static_cast<bool>(M5.Power.isCharging());
-  systemInfo.currentTime = FormatCurrentClock(weatherData);
-  systemInfo.ipAddress = primaryIp;
-  systemInfo.webUiUrl = primaryIp.length() > 0 ? String("http://") + primaryIp + ":80" : String();
-  systemInfo.wifiSsid = wifiInfo.connected ? wifiInfo.ssid : (wifiInfo.accessPointSsid.length() > 0 ? wifiInfo.accessPointSsid : wifiInfo.ssid);
-  systemInfo.wifiRssi = wifiInfo.connected ? String(wifiInfo.rssi) + " dBm" : String();
-  systemInfo.wifiStatus = wifiInfo.statusText;
-  systemInfo.weatherStatus = weatherData.lastErrorMessage.length() > 0 ? weatherData.lastErrorMessage : String(weatherData.current.valid ? "Ready" : "Waiting for first update");
-  systemInfo.radarStatus = gRadarEngine.lastErrorMessage().length() > 0 ? gRadarEngine.lastErrorMessage() : String(gRadarEngine.frameCount() > 0 ? "Ready" : "Waiting for radar frames");
-  systemInfo.lastUpdate = FormatRelativeAge(weatherData.lastCycleAtMs);
-  systemInfo.spiffsUsage = FormatSpiffsUsage();
-  systemInfo.firmwareVersion = APP_GIT_VERSION;
-  systemInfo.ledMode = gLedEngine.statusLabel();
-
-  gUi.update(weatherData, gRadarEngine, systemInfo);
-  gLedEngine.updateWeatherMood(weatherData);
+    gUi.update(weatherData, gRadarEngine, systemInfo);
+    gLedEngine.updateWeatherMood(weatherData);
+  }
 
   const uint8_t activePage = gUi.activePageIndex();
   if (activePage != gLastPageIndex) {
@@ -604,8 +880,21 @@ void loop() {
   gLedEngine.setSystemStatus(!gMainUiStarted, gWifi.connected(), warningState);
   gLedEngine.update();
 
+  gLastContentMs = millis() - contentStarted;
+  const uint32_t renderStarted = millis();
   gAudioEngine.update();
+  gLastAudioMs = millis() - renderStarted;
+  gFlushPixels = 0;
+  gFlushCalls = 0;
   lv_timer_handler();
+  gLastRenderMs = millis() - renderStarted - gLastAudioMs;
+  gLastFlushPixels = gFlushPixels;
+  gLastFlushCalls = gFlushCalls;
+  if (gFlushCalls != 0) {
+    gPaintedPage = gUi.isPageFullyVisible() ? gUi.activePageIndex() : 0xFF;
+    ++gPaintGeneration;
+  }
+  gLastLoopMs = millis() - loopStarted;
 
   delay(16);
 }

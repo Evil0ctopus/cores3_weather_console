@@ -7,7 +7,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_obj_add_style(obj, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(obj, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(obj, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(obj, 8, LV_PART_MAIN);
@@ -51,7 +51,7 @@ void RadarPanel::begin(lv_obj_t* parent, ThemeManager& theme) {
 	stageLabel_ = lv_label_create(card_);
 	lv_obj_add_style(stageLabel_, theme.bodyStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_font(stageLabel_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(stageLabel_, 118, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(stageLabel_, 256, LV_PART_MAIN);
 	lv_obj_set_width(stageLabel_, lv_pct(100));
 	lv_label_set_long_mode(stageLabel_, LV_LABEL_LONG_WRAP);
 	lv_label_set_text(stageLabel_, "Live radar imagery will appear here.");
@@ -108,7 +108,7 @@ void RadarPanel::applyTheme(ThemeManager& theme) {
 	style_title_chip(titleLabel_, theme, "Radar");
 	style_meta_chip(metaLabel_, theme);
 	lv_obj_add_style(stageLabel_, theme.bodyStyle(), LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(stageLabel_, 118, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(stageLabel_, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(imageFrame_, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(imageFrame_, theme.spacing().imageRadius, LV_PART_MAIN);
 }
@@ -116,10 +116,10 @@ void RadarPanel::applyTheme(ThemeManager& theme) {
 void RadarPanel::setDownloadProgress(size_t completed, size_t total, const char* stage) {
 	if (metaLabel_ != nullptr) {
 		String meta = String(static_cast<unsigned>(completed)) + "/" + String(static_cast<unsigned>(total)) + " frames";
-		lv_label_set_text(metaLabel_, meta.c_str());
+		ui_label_set_text_if_changed(metaLabel_, meta.c_str());
 	}
 	if (stageLabel_ != nullptr && stage != nullptr) {
-		lv_label_set_text(stageLabel_, stage);
+		ui_label_set_text_if_changed(stageLabel_, stage);
 	}
 }
 
@@ -135,18 +135,28 @@ void RadarPanel::update(const WeatherData& data, weather::RadarEngine& engine) {
 		} else {
 			meta = "Waiting for radar";
 		}
-		lv_label_set_text(metaLabel_, meta.c_str());
+		ui_label_set_text_if_changed(metaLabel_, meta.c_str());
 	}
 
-	const lv_img_dsc_t* frame = engine.currentFrameAsLvglImage();
-	if (frame != nullptr && image_ != nullptr) {
-		const int32_t sourceWidth = frame->header.w > 0 ? static_cast<int32_t>(frame->header.w) : 256;
-		const int32_t sourceHeight = frame->header.h > 0 ? static_cast<int32_t>(frame->header.h) : 256;
-		const int32_t mapOffsetX = (((sourceWidth / 2) - static_cast<int32_t>(data.radarMarkerX)) * static_cast<int32_t>(kRadarImageZoom) / 256) + kRadarImageOffsetX;
-		const int32_t mapOffsetY = ((sourceHeight / 2) - static_cast<int32_t>(data.radarMarkerY)) * static_cast<int32_t>(kRadarImageZoom) / 256;
-		lv_img_set_src(image_, frame);
-		lv_img_set_zoom(image_, kRadarImageZoom);
-		lv_obj_align(image_, LV_ALIGN_CENTER, static_cast<lv_coord_t>(mapOffsetX), static_cast<lv_coord_t>(mapOffsetY));
+	const uint32_t revision = engine.displayRevision();
+	if (image_ != nullptr && (revision != displayedRevision_ ||
+			displayedMarkerX_ != data.radarMarkerX || displayedMarkerY_ != data.radarMarkerY)) {
+		const lv_img_dsc_t* frame = engine.currentFrameAsLvglImage();
+		if (frame != nullptr) {
+			const int32_t sourceWidth = frame->header.w > 0 ? static_cast<int32_t>(frame->header.w) : 256;
+			const int32_t sourceHeight = frame->header.h > 0 ? static_cast<int32_t>(frame->header.h) : 256;
+			const int32_t mapOffsetX = (((sourceWidth / 2) - static_cast<int32_t>(data.radarMarkerX)) * static_cast<int32_t>(kRadarImageZoom) / 256) + kRadarImageOffsetX;
+			const int32_t mapOffsetY = ((sourceHeight / 2) - static_cast<int32_t>(data.radarMarkerY)) * static_cast<int32_t>(kRadarImageZoom) / 256;
+			lv_img_set_src(image_, frame);
+			lv_img_set_zoom(image_, kRadarImageZoom);
+			lv_obj_align(image_, LV_ALIGN_CENTER, static_cast<lv_coord_t>(mapOffsetX), static_cast<lv_coord_t>(mapOffsetY));
+			lv_obj_clear_flag(image_, LV_OBJ_FLAG_HIDDEN);
+		} else {
+			lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
+		}
+		displayedRevision_ = revision;
+		displayedMarkerX_ = data.radarMarkerX;
+		displayedMarkerY_ = data.radarMarkerY;
 	}
 	if (locationDot_ != nullptr) {
 		lv_obj_align(locationDot_, LV_ALIGN_CENTER, 0, 0);
@@ -155,21 +165,21 @@ void RadarPanel::update(const WeatherData& data, weather::RadarEngine& engine) {
 
 	if (stageLabel_ != nullptr) {
 		if (engine.isDownloading()) {
-			lv_label_set_text(stageLabel_, "Refreshing radar image for this location.");
+			ui_label_set_text_if_changed(stageLabel_, "Refreshing radar image for this location.");
 		} else if (engine.isAnimationReady()) {
 			String stage = String("Center dot marks ") + (data.locationName.length() > 0 ? data.locationName : String("your saved location"));
 			if (data.alertCount > 0) {
 				stage += " • warned area";
 			}
-			lv_label_set_text(stageLabel_, stage.c_str());
+			ui_label_set_text_if_changed(stageLabel_, stage.c_str());
 		} else if (data.lastError == WeatherErrorCode::NotConfigured) {
-			lv_label_set_text(stageLabel_, "Configure weather to unlock live radar.");
+			ui_label_set_text_if_changed(stageLabel_, "Configure weather to unlock live radar.");
 		} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-			lv_label_set_text(stageLabel_, "Radar is waiting for Wi-Fi to reconnect.");
+			ui_label_set_text_if_changed(stageLabel_, "Radar is waiting for Wi-Fi to reconnect.");
 		} else if (engine.lastErrorMessage().length() > 0) {
-			lv_label_set_text(stageLabel_, engine.lastErrorMessage().c_str());
+			ui_label_set_text_if_changed(stageLabel_, engine.lastErrorMessage().c_str());
 		} else if (data.lastErrorMessage.length() > 0) {
-			lv_label_set_text(stageLabel_, data.lastErrorMessage.c_str());
+			ui_label_set_text_if_changed(stageLabel_, data.lastErrorMessage.c_str());
 		} else {
 			lv_label_set_text(stageLabel_, "Waiting for the next radar update.");
 		}

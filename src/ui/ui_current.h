@@ -13,7 +13,7 @@ class CurrentPage {
  public:
 	void begin(lv_obj_t* parent, ThemeManager& theme);
 	void applyTheme(ThemeManager& theme);
-	void update(const WeatherData& data, const SystemInfo& systemInfo);
+	void update(const WeatherData& data, const SystemInfo& systemInfo, bool imperial = false);
 
  private:
 	ThemeManager* theme_ = nullptr;

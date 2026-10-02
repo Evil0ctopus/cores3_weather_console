@@ -3,8 +3,14 @@
 
 #define LV_COLOR_DEPTH 16
 #define LV_COLOR_16_SWAP 0
-#define LV_MEM_SIZE (128U * 1024U)
+#define LV_MEM_CUSTOM 1
+#define LV_MEM_CUSTOM_INCLUDE "lv_psram.h"
+#define LV_MEM_CUSTOM_ALLOC lv_psram_alloc
+#define LV_MEM_CUSTOM_FREE heap_caps_free
+#define LV_MEM_CUSTOM_REALLOC lv_psram_realloc
 #define LV_USE_LOG 0
+#define LV_USE_PNG 1
+#define LV_IMG_CACHE_DEF_SIZE 24
 
 // Use Arduino millis() as the tick source so lv_tick_inc() doesn't need
 // to be called manually in the loop.

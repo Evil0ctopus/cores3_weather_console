@@ -7,7 +7,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_obj_add_style(obj, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(obj, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(obj, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(obj, 8, LV_PART_MAIN);
@@ -56,6 +56,7 @@ void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	list_ = lv_obj_create(root_);
 	lv_obj_set_size(list_, lv_pct(100), lv_pct(100));
 	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, 42);
+	ui_fit_scroll_body(list_, 42);
 	lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
@@ -71,7 +72,7 @@ void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		lv_obj_add_style(rows_[i], theme.cardAltStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_color(rows_[i], theme.palette().textPrimary, LV_PART_MAIN);
 		lv_obj_set_style_text_font(rows_[i], &lv_font_montserrat_14, LV_PART_MAIN);
-		lv_obj_set_style_transform_zoom(rows_[i], 110, LV_PART_MAIN);
+		lv_obj_set_style_transform_zoom(rows_[i], 256, LV_PART_MAIN);
 		lv_obj_set_style_text_line_space(rows_[i], theme.typography().bodyLineSpace, LV_PART_MAIN);
 		lv_obj_set_style_pad_all(rows_[i], 12, LV_PART_MAIN);
 		lv_obj_set_style_radius(rows_[i], 16, LV_PART_MAIN);
@@ -99,28 +100,33 @@ void AlertsPage::applyTheme(ThemeManager& theme) {
 void AlertsPage::update(const WeatherData& data) {
 	if (data.alertCount == 0) {
 		if (data.lastError == WeatherErrorCode::NotConfigured) {
-			lv_label_set_text(subtitle_, "Setup");
+			ui_label_set_text_if_changed(subtitle_, "Setup");
 		} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-			lv_label_set_text(subtitle_, "Offline");
+			ui_label_set_text_if_changed(subtitle_, "Offline");
 		} else {
-			lv_label_set_text(subtitle_, "All clear");
+			ui_label_set_text_if_changed(subtitle_, "All clear");
 		}
 	} else {
-		lv_label_set_text(subtitle_, (String(data.alertCount) + " active").c_str());
+		ui_label_set_text_if_changed(subtitle_, (String(data.alertCount) + " active").c_str());
 	}
 
 	for (size_t i = 0; i < kMaxWeatherAlerts; ++i) {
 		if (i >= data.alertCount || !data.alerts[i].valid) {
 			if (i == 0) {
 				lv_obj_clear_flag(rows_[i], LV_OBJ_FLAG_HIDDEN);
-				lv_obj_set_style_bg_opa(rows_[i], LV_OPA_40, LV_PART_MAIN);
-				lv_obj_set_style_bg_color(rows_[i], theme_ != nullptr ? theme_->palette().surfaceAlt : lv_color_hex(0x2A3242), LV_PART_MAIN);
+				if (lv_obj_get_style_bg_opa(rows_[i], LV_PART_MAIN) != LV_OPA_40) {
+					lv_obj_set_style_bg_opa(rows_[i], LV_OPA_40, LV_PART_MAIN);
+				}
+				const lv_color_t color = theme_ != nullptr ? theme_->palette().surfaceAlt : lv_color_hex(0x2A3242);
+				if (lv_obj_get_style_bg_color(rows_[i], LV_PART_MAIN).full != color.full) {
+					lv_obj_set_style_bg_color(rows_[i], color, LV_PART_MAIN);
+				}
 				if (data.lastError == WeatherErrorCode::NotConfigured) {
-					lv_label_set_text(rows_[i], "Weather alerts need setup\nConfigure Wi-Fi and location in the Web UI.");
+					ui_label_set_text_if_changed(rows_[i], "Weather alerts need setup\nConfigure Wi-Fi and location in the Web UI.");
 				} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-					lv_label_set_text(rows_[i], "Alerts paused\nWaiting for Wi-Fi before checking warnings.");
+					ui_label_set_text_if_changed(rows_[i], "Alerts paused\nWaiting for Wi-Fi before checking warnings.");
 				} else {
-					lv_label_set_text(rows_[i], "No active weather alerts\nConditions are currently calm.");
+					ui_label_set_text_if_changed(rows_[i], "No active weather alerts\nConditions are currently calm.");
 				}
 			} else {
 				lv_obj_add_flag(rows_[i], LV_OBJ_FLAG_HIDDEN);
@@ -131,8 +137,13 @@ void AlertsPage::update(const WeatherData& data) {
 		lv_obj_clear_flag(rows_[i], LV_OBJ_FLAG_HIDDEN);
 		const WeatherAlert& alert = data.alerts[i];
 		const String severity = alert.severity.length() > 0 ? alert.severity : String("Advisory");
-		lv_obj_set_style_bg_color(rows_[i], alert_color_for(severity, theme_), LV_PART_MAIN);
-		lv_obj_set_style_bg_opa(rows_[i], LV_OPA_40, LV_PART_MAIN);
+		const lv_color_t color = alert_color_for(severity, theme_);
+		if (lv_obj_get_style_bg_color(rows_[i], LV_PART_MAIN).full != color.full) {
+			lv_obj_set_style_bg_color(rows_[i], color, LV_PART_MAIN);
+		}
+		if (lv_obj_get_style_bg_opa(rows_[i], LV_PART_MAIN) != LV_OPA_40) {
+			lv_obj_set_style_bg_opa(rows_[i], LV_OPA_40, LV_PART_MAIN);
+		}
 
 		String line = severity;
 		line += " • ";
@@ -143,7 +154,7 @@ void AlertsPage::update(const WeatherData& data) {
 			line += "\n";
 			line += alert.description;
 		}
-		lv_label_set_text(rows_[i], line.c_str());
+		ui_label_set_text_if_changed(rows_[i], line.c_str());
 	}
 }
 

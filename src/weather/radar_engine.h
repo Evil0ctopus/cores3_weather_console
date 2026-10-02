@@ -139,6 +139,7 @@ class RadarEngine {
 	size_t frameCount() const;
 	size_t completedFrameCount() const;
 	size_t currentAnimationIndex() const;
+	uint32_t displayRevision() const;
 	const RadarFrameInfo* frameInfo(size_t index) const;
 
 	const lv_img_dsc_t* currentFrameAsLvglImage();
@@ -251,6 +252,7 @@ class RadarEngine {
 	size_t displayBufferLength_ = 0;
 	lv_img_dsc_t displayDsc;
 	uint8_t interpolationStep_ = 0;
+	uint32_t displayRevision_ = 0;
 
 	UrlParts activeUrl_;
 	WiFiClient activeClient_;

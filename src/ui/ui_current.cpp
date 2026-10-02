@@ -1,4 +1,5 @@
 #include "ui_current.h"
+#include "ui_units.h"
 
 #include <math.h>
 
@@ -9,7 +10,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_obj_add_style(obj, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(obj, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(obj, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(obj, 8, LV_PART_MAIN);
@@ -28,7 +29,7 @@ void style_chip(lv_obj_t* obj, ThemeManager& theme) {
 
 void set_metric(lv_obj_t* valueLabel, const String& value) {
 	if (valueLabel != nullptr) {
-		lv_label_set_text(valueLabel, value.c_str());
+		ui_label_set_text_if_changed(valueLabel, value.c_str());
 	}
 }
 
@@ -52,6 +53,7 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	scroll_ = lv_obj_create(root_);
 	lv_obj_set_size(scroll_, lv_pct(100), lv_pct(100));
 	lv_obj_align(scroll_, LV_ALIGN_TOP_LEFT, 0, 30);
+	ui_fit_scroll_body(scroll_, 30);
 	lv_obj_set_style_bg_opa(scroll_, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(scroll_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(scroll_, 0, LV_PART_MAIN);
@@ -103,7 +105,7 @@ void CurrentPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	summaryLabel_ = lv_label_create(heroCard_);
 	lv_obj_add_style(summaryLabel_, theme.bodyStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_font(summaryLabel_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(summaryLabel_, 145, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(summaryLabel_, 256, LV_PART_MAIN);
 	lv_obj_set_style_text_line_space(summaryLabel_, theme.typography().bodyLineSpace, LV_PART_MAIN);
 	lv_obj_set_width(summaryLabel_, lv_pct(56));
 	lv_label_set_long_mode(summaryLabel_, LV_LABEL_LONG_WRAP);
@@ -183,7 +185,7 @@ void CurrentPage::applyTheme(ThemeManager& theme) {
 	lv_obj_set_width(tempLabel_, 150);
 	lv_obj_move_foreground(tempLabel_);
 	lv_obj_add_style(summaryLabel_, theme.bodyStyle(), LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(summaryLabel_, 145, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(summaryLabel_, 256, LV_PART_MAIN);
 
 	for (size_t i = 0; i < 6; ++i) {
 		lv_obj_add_style(metricCards_[i], theme.cardAltStyle(), LV_PART_MAIN);
@@ -211,7 +213,7 @@ void CurrentPage::applyTheme(ThemeManager& theme) {
 	}
 }
 
-void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) {
+void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo, bool imperial) {
 	String city = data.locationName.length() > 0 ? data.locationName : data.locationKey;
 	if (city.length() == 0) {
 		if (data.lastError == WeatherErrorCode::NotConfigured) {
@@ -222,27 +224,27 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 			city = "Unknown location";
 		}
 	}
-	lv_label_set_text(cityLabel_, city.c_str());
+	ui_label_set_text_if_changed(cityLabel_, city.c_str());
 
 	if (!data.current.valid) {
 		lastConditionCode_ = -1;
 		lastIsDaylight_ = true;
-		lv_label_set_text(tempLabel_, "-- C");
+		ui_label_set_text_if_changed(tempLabel_, format_temperature(NAN, imperial).c_str());
 		if (data.lastError == WeatherErrorCode::NotConfigured) {
-			lv_label_set_text(summaryLabel_, "Weather setup required");
-			lv_label_set_text(statusChip_, "Setup");
+			ui_label_set_text_if_changed(summaryLabel_, "Weather setup required");
+			ui_label_set_text_if_changed(statusChip_, "Setup");
 		} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-			lv_label_set_text(summaryLabel_, "Waiting for Wi-Fi");
-			lv_label_set_text(statusChip_, "Offline");
+			ui_label_set_text_if_changed(summaryLabel_, "Waiting for Wi-Fi");
+			ui_label_set_text_if_changed(statusChip_, "Offline");
 		} else {
-			lv_label_set_text(summaryLabel_, "Current conditions unavailable");
-			lv_label_set_text(statusChip_, "Idle");
+			ui_label_set_text_if_changed(summaryLabel_, "Current conditions unavailable");
+			ui_label_set_text_if_changed(statusChip_, "Idle");
 		}
 
-		set_metric(metricValueLabels_[0], !isnan(data.current.temperatureC) ? String(data.current.temperatureC, 0) + " C" : String("Pending"));
+		set_metric(metricValueLabels_[0], format_temperature(data.current.temperatureC, imperial));
 		set_metric(metricValueLabels_[1], "-- %");
-		set_metric(metricValueLabels_[2], "-- kph");
-		set_metric(metricValueLabels_[3], "---- mb");
+		set_metric(metricValueLabels_[2], format_wind(NAN, imperial));
+		set_metric(metricValueLabels_[3], format_pressure(NAN, imperial));
 		set_metric(metricValueLabels_[4], systemInfo.lastUpdate.length() > 0 ? systemInfo.lastUpdate : String("Never"));
 		set_metric(metricValueLabels_[5], String(data.alertCount) + " active");
 
@@ -253,7 +255,7 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 			details += "  ";
 			details += data.lastErrorMessage;
 		}
-		lv_label_set_text(detailsLabel_, details.c_str());
+		ui_label_set_text_if_changed(detailsLabel_, details.c_str());
 
 		if (theme_ != nullptr && (!hasDisplayedIcon_ || displayedIconId_ != IconId::ICON_CLEAR_DAY)) {
 			if (iconObj_ != nullptr) {
@@ -290,20 +292,19 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 		}
 	}
 
-	String temp = isnan(data.current.temperatureC) ? String("-- C") : String(data.current.temperatureC, 0) + " C";
-	lv_label_set_text(tempLabel_, temp.c_str());
+	String temp = format_temperature(data.current.temperatureC, imperial);
+	ui_label_set_text_if_changed(tempLabel_, temp.c_str());
 
 	String summary = data.current.summary.length() > 0 ? data.current.summary : String("Conditions ready");
 	summary += data.current.isDaylight ? " • Day" : " • Night";
-	lv_label_set_text(summaryLabel_, summary.c_str());
-	lv_label_set_text(statusChip_, data.current.isDaylight ? "Day" : "Night");
+	ui_label_set_text_if_changed(summaryLabel_, summary.c_str());
+	ui_label_set_text_if_changed(statusChip_, data.current.isDaylight ? "Day" : "Night");
 
-	set_metric(metricValueLabels_[0], !isnan(data.current.feelsLikeC)
-		? String(data.current.feelsLikeC, 0) + " C"
-		: (!isnan(data.current.temperatureC) ? String(data.current.temperatureC, 0) + " C" : String("Pending")));
+	set_metric(metricValueLabels_[0], format_temperature(isnan(data.current.feelsLikeC) ?
+		data.current.temperatureC : data.current.feelsLikeC, imperial));
 	set_metric(metricValueLabels_[1], data.current.humidityPct >= 0 ? String(data.current.humidityPct) + " %" : String("-- %"));
-	set_metric(metricValueLabels_[2], isnan(data.current.windKph) ? String("-- kph") : String(data.current.windKph, 0) + " kph");
-	set_metric(metricValueLabels_[3], isnan(data.current.pressureMb) ? String("---- mb") : String(data.current.pressureMb, 0) + " mb");
+	set_metric(metricValueLabels_[2], format_wind(data.current.windKph, imperial));
+	set_metric(metricValueLabels_[3], format_pressure(data.current.pressureMb, imperial));
 	set_metric(metricValueLabels_[4], systemInfo.lastUpdate.length() > 0 ? systemInfo.lastUpdate : String("Just now"));
 	set_metric(metricValueLabels_[5], String(data.alertCount) + (data.alertCount == 1 ? " alert" : " alerts"));
 
@@ -321,7 +322,7 @@ void CurrentPage::update(const WeatherData& data, const SystemInfo& systemInfo) 
 		details += "  •  ";
 		details += systemInfo.webUiUrl;
 	}
-	lv_label_set_text(detailsLabel_, details.c_str());
+	ui_label_set_text_if_changed(detailsLabel_, details.c_str());
 }
 
 }  // namespace ui

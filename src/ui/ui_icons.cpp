@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SPIFFS.h>
+#include <esp_heap_caps.h>
 
 #include "ui_assets.h"
 #include "ui_theme.h"
@@ -15,6 +16,49 @@ bool gMissingLogged[kIconCount] = {false};
 bool gLoadedLogged[kIconCount] = {false};
 bool gSpiffsUnavailableLogged = false;
 bool gStartupReportLogged = false;
+constexpr uint16_t kNativeSizes[] = {22, 26, 34, 36, 48, 56};
+constexpr size_t kNativeSizeCount = sizeof(kNativeSizes) / sizeof(kNativeSizes[0]);
+lv_img_dsc_t gNativeIcons[kIconCount][kNativeSizeCount] = {};
+uint8_t* gNativePixels = nullptr;
+
+void load_native_icons() {
+	if (gNativePixels != nullptr) {
+		return;
+	}
+	size_t expectedSize = 4;
+	for (uint16_t size : kNativeSizes) {
+		expectedSize += kIconCount * size * size * 3U;
+	}
+	File file = SPIFFS.open("/icons/atlas.bin", FILE_READ);
+	if (!file || file.size() != expectedSize) {
+		Serial.println("[ICON] Native atlas missing or invalid; using PNG fallback");
+		return;
+	}
+	uint8_t* pixels = static_cast<uint8_t*>(heap_caps_malloc(expectedSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+	if (pixels == nullptr) {
+		Serial.println("[ICON] Native atlas allocation failed; using PNG fallback");
+		return;
+	}
+	if (file.read(pixels, expectedSize) != expectedSize || memcmp(pixels, "ATI1", 4) != 0) {
+		heap_caps_free(pixels);
+		Serial.println("[ICON] Native atlas read/header failed; using PNG fallback");
+		return;
+	}
+	gNativePixels = pixels;
+	size_t offset = 4;
+	for (size_t icon = 0; icon < kIconCount; ++icon) {
+		for (size_t variant = 0; variant < kNativeSizeCount; ++variant) {
+			lv_img_dsc_t& image = gNativeIcons[icon][variant];
+			image.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+			image.header.w = kNativeSizes[variant];
+			image.header.h = kNativeSizes[variant];
+			image.data_size = kNativeSizes[variant] * kNativeSizes[variant] * 3U;
+			image.data = pixels + offset;
+			offset += image.data_size;
+		}
+	}
+	Serial.printf("[ICON] Native atlas resident in PSRAM: %u bytes\n", static_cast<unsigned>(expectedSize));
+}
 
 struct IconPathSpec {
 	const char* primary;
@@ -260,22 +304,21 @@ static bool ensure_spiffs_ready() {
 	return false;
 }
 
-static bool use_custom_vector_icon(IconId id) {
-	return id == IconId::ICON_CLEAR_DAY || id == IconId::ICON_PARTLY_CLOUDY;
-}
-
 lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 	if (parent == nullptr) {
 		Serial.println("[ICON] ERROR: ui_icon_create parent is null.");
 		return nullptr;
 	}
-
-	if (use_custom_vector_icon(id)) {
-		const lv_color_t vectorColor = (id == IconId::ICON_CLEAR_DAY)
-			? lv_color_hex(0xF7B500)
-			: lv_color_hex(0xB7C8D9);
-		Serial.printf("[ICON] Using custom minimalist vector icon for id=%d\n", static_cast<int>(id));
-		return create_fallback_circle(parent, vectorColor, id);
+	if (gNativePixels != nullptr) {
+		lv_obj_t* holder = lv_obj_create(parent);
+		lv_obj_remove_style_all(holder);
+		lv_obj_set_size(holder, 48, 48);
+		lv_obj_clear_flag(holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_t* image = lv_img_create(holder);
+		lv_img_set_src(image, &gNativeIcons[icon_index(id)][4]);
+		lv_obj_clear_flag(image, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+		ui_icon_set_size(holder, 48, 48);
+		return holder;
 	}
 
 	const IconPathSpec spec = icon_path_spec(id);
@@ -340,7 +383,14 @@ lv_obj_t* ui_icon_create(lv_obj_t* parent, IconId id, ThemeId theme) {
 	// Set some default styling
 	lv_obj_set_style_pad_all(icon, 0, LV_PART_MAIN);
 
-	return icon;
+	lv_obj_t* holder = lv_obj_create(parent);
+	lv_obj_remove_style_all(holder);
+	lv_obj_set_size(holder, 48, 48);
+	lv_obj_clear_flag(holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_parent(icon, holder);
+	lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+	ui_icon_set_size(holder, 48, 48);
+	return holder;
 }
 
 void ui_icon_startup_report() {
@@ -353,6 +403,7 @@ void ui_icon_startup_report() {
 		Serial.println("[ICON] Startup report: SPIFFS unavailable");
 		return;
 	}
+	load_native_icons();
 
 	unsigned found = 0;
 	for (int i = 0; i < static_cast<int>(kIconCount); ++i) {
@@ -380,6 +431,43 @@ void ui_icon_set_size(lv_obj_t* icon, uint16_t width, uint16_t height) {
 		return;
 	}
 	lv_obj_set_size(icon, width, height);
+	if (lv_obj_get_child_cnt(icon) == 1) {
+		lv_obj_t* image = lv_obj_get_child(icon, 0);
+		if (lv_obj_check_type(image, &lv_img_class)) {
+			if (gNativePixels != nullptr && width == height) {
+				const void* source = lv_img_get_src(image);
+				for (size_t id = 0; id < kIconCount; ++id) {
+					bool matches = false;
+					for (size_t variant = 0; variant < kNativeSizeCount; ++variant) {
+						matches = matches || source == &gNativeIcons[id][variant];
+					}
+					if (matches) {
+						for (size_t variant = 0; variant < kNativeSizeCount; ++variant) {
+							if (kNativeSizes[variant] == width) {
+								lv_img_set_src(image, &gNativeIcons[id][variant]);
+								break;
+							}
+						}
+						break;
+					}
+				}
+			}
+			lv_img_header_t header;
+			if (lv_img_decoder_get_info(lv_img_get_src(image), &header) != LV_RES_OK ||
+				header.w == 0 || header.h == 0) {
+				Serial.println("[ICON] ERROR: could not determine image size.");
+				return;
+			}
+			const uint32_t scaleX = static_cast<uint32_t>(width) * 256U / header.w;
+			const uint32_t scaleY = static_cast<uint32_t>(height) * 256U / header.h;
+			const uint16_t zoom = static_cast<uint16_t>(scaleX < scaleY ? scaleX : scaleY);
+			lv_img_set_pivot(image, 0, 0);
+			lv_img_set_zoom(image, zoom);
+			lv_img_set_antialias(image, true);
+			lv_obj_set_pos(image, (width - header.w * zoom / 256U) / 2,
+				(height - header.h * zoom / 256U) / 2);
+		}
+	}
 }
 
 void ui_icon_delete(lv_obj_t* icon) {

@@ -26,6 +26,9 @@ class RadarPanel {
 	lv_obj_t* locationDot_ = nullptr;
 	lv_obj_t* attributionLabel_ = nullptr;
 	lv_obj_t* alertLabel_ = nullptr;
+	uint32_t displayedRevision_ = UINT32_MAX;
+	int32_t displayedMarkerX_ = -1;
+	int32_t displayedMarkerY_ = -1;
 };
 
 }  // namespace ui

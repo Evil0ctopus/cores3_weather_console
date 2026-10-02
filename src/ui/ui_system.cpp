@@ -9,13 +9,12 @@ constexpr lv_coord_t kSystemThemeLabelY = 18;
 constexpr lv_coord_t kSystemDropdownY = 36;
 constexpr lv_coord_t kSystemDropdownHeight = 38;
 constexpr lv_coord_t kSystemListY = 82;
-constexpr lv_coord_t kSystemListHeight = 146;
 constexpr lv_coord_t kSystemCardHeight = 116;
 constexpr lv_coord_t kSystemCardGap = 8;
 
 void setRow(lv_obj_t* label, const char* heading, const String& value) {
 	String text = String(heading) + "\n" + value;
-	lv_label_set_text(label, text.c_str());
+	ui_label_set_text_if_changed(label, text.c_str());
 }
 
 String themeOptions() {
@@ -52,7 +51,7 @@ void SystemPage::begin(lv_obj_t* parent,
 	lv_obj_add_style(title_, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(title_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(title_, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(title_, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(title_, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(title_, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(title_, 8, LV_PART_MAIN);
@@ -90,8 +89,8 @@ void SystemPage::begin(lv_obj_t* parent,
 
 	list_ = lv_obj_create(root_);
 	lv_obj_set_width(list_, lv_pct(100));
-	lv_obj_set_height(list_, kSystemListHeight);
 	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, kSystemListY);
+	ui_fit_scroll_body(list_, kSystemListY);
 	lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
@@ -128,7 +127,7 @@ void SystemPage::applyTheme(ThemeManager& theme) {
 	lv_obj_set_style_pad_all(root_, kSystemPagePadding, LV_PART_MAIN);
 	lv_obj_add_style(title_, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(title_, theme.palette().textPrimary, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(title_, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(title_, 256, LV_PART_MAIN);
 	lv_obj_add_style(themeLabel_, theme.captionStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.cardAltStyle(), LV_PART_MAIN);
 	lv_obj_add_style(themeDropdown_, theme.defaultLabelStyle(), LV_PART_MAIN);
@@ -141,8 +140,8 @@ void SystemPage::applyTheme(ThemeManager& theme) {
 	lv_obj_align(themeLabel_, LV_ALIGN_TOP_LEFT, 0, kSystemThemeLabelY);
 	lv_obj_set_height(themeDropdown_, kSystemDropdownHeight);
 	lv_obj_align(themeDropdown_, LV_ALIGN_TOP_LEFT, 0, kSystemDropdownY);
-	lv_obj_set_height(list_, kSystemListHeight);
 	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, kSystemListY);
+	ui_fit_scroll_body(list_, kSystemListY);
 	lv_obj_set_style_pad_row(list_, kSystemCardGap, LV_PART_MAIN);
 	for (size_t i = 0; i < 11; ++i) {
 		lv_obj_set_height(rowLabels_[i], kSystemCardHeight);

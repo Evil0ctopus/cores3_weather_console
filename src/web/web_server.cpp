@@ -49,7 +49,8 @@ void WebServerHost::begin(app::SettingsStore& settingsStore,
 			return;
 		}
 		client->send("connected", "status", millis());
-		publishIfChanged(true);
+		// The library holds its client-list mutex during this callback.
+		connectionPublishPending_.store(true);
 	});
 	server_.addHandler(&events_);
 
@@ -74,13 +75,14 @@ void WebServerHost::tick() {
 	}
 
 	const uint32_t now = millis();
+	const bool force = connectionPublishPending_.exchange(false);
 	const bool settingsDirty = settingsStore_ != nullptr && settingsStore_->revision() != lastPublishedRevision_;
 	const bool debugDirty = debugLog_ != nullptr && debugLog_->revision() != lastPublishedDebugRevision_;
-	if ((now - lastPublishMs_) < kPreviewPublishIntervalMs && !settingsDirty && !debugDirty) {
+	if (!force && (now - lastPublishMs_) < kPreviewPublishIntervalMs && !settingsDirty && !debugDirty) {
 		return;
 	}
 
-	publishIfChanged(false);
+	publishIfChanged(force);
 }
 
 void WebServerHost::onSettingsSavedAdapter(void* userContext, const app::AppSettings& settings) {

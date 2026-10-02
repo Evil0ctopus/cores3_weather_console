@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ESPAsyncWebServer.h>
+#include <atomic>
 
 #include "../system/debug_log.h"
 #include "../system/settings.h"
@@ -47,6 +48,7 @@ class WebServerHost {
 	String lastDebugPayload_;
 	uint32_t lastPublishedDebugRevision_ = 0;
 	bool started_ = false;
+	std::atomic<bool> connectionPublishPending_{false};
 };
 
 }  // namespace web

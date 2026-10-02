@@ -42,9 +42,9 @@ const char* ui_icon_get_path(IconId id);
  * @param parent Parent LVGL object to attach the icon to.
  * @param id Icon identifier.
  * @param theme Current theme for styling (used for fallback primitive tint).
- * @return Pointer to the created lv_img object, or nullptr if creation failed.
+ * @return Pointer to the icon container, or nullptr if creation failed.
  *
- * On success, returns an lv_img object displaying the PNG from SPIFFS.
+ * On success, returns a transparent container with an antialiased PNG image.
  * On failure (file missing, decode error, etc.), creates a fallback primitive
  * (small colored circle or square) so the UI remains usable. Logs all errors
  * with IconId, file path, and reason.

@@ -1,4 +1,5 @@
 #include "ui_daily.h"
+#include "ui_units.h"
 
 #include <math.h>
 
@@ -9,7 +10,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_obj_add_style(obj, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(obj, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(obj, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(obj, 8, LV_PART_MAIN);
@@ -20,12 +21,12 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_label_set_text(obj, text);
 }
 
-String build_temp_range(const DailyForecast& forecast) {
+String build_temp_range(const DailyForecast& forecast, bool imperial) {
 	String text = "L ";
-	text += isnan(forecast.minTempC) ? "--" : String(forecast.minTempC, 0);
+	text += isnan(forecast.minTempC) ? "--" : String(display_temperature(forecast.minTempC, imperial), 0);
 	text += "  H ";
-	text += isnan(forecast.maxTempC) ? "--" : String(forecast.maxTempC, 0);
-	text += " C";
+	text += isnan(forecast.maxTempC) ? "--" : String(display_temperature(forecast.maxTempC, imperial), 0);
+	text += imperial ? " F" : " C";
 	return text;
 }
 
@@ -50,12 +51,13 @@ void DailyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 	lv_obj_add_style(subtitle_, theme.captionStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_font(subtitle_, &lv_font_montserrat_14, LV_PART_MAIN);
 	lv_obj_set_style_transform_zoom(subtitle_, theme.typography().captionZoom, LV_PART_MAIN);
-	lv_label_set_text(subtitle_, "7-day outlook");
+	ui_label_set_text_if_changed(subtitle_, "7-day outlook");
 	lv_obj_align(subtitle_, LV_ALIGN_TOP_LEFT, 0, 24);
 
 	list_ = lv_obj_create(root_);
 	lv_obj_set_size(list_, lv_pct(100), lv_pct(100));
 	lv_obj_align(list_, LV_ALIGN_TOP_LEFT, 0, 52);
+	ui_fit_scroll_body(list_, 52);
 	lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_border_width(list_, 0, LV_PART_MAIN);
 	lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
@@ -94,7 +96,7 @@ void DailyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		rowTempLabels_[i] = lv_label_create(rowCards_[i]);
 		lv_obj_add_style(rowTempLabels_[i], theme.titleStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_font(rowTempLabels_[i], &lv_font_montserrat_14, LV_PART_MAIN);
-		lv_obj_set_style_transform_zoom(rowTempLabels_[i], 118, LV_PART_MAIN);
+		lv_obj_set_style_transform_zoom(rowTempLabels_[i], 256, LV_PART_MAIN);
 		lv_label_set_text(rowTempLabels_[i], "--");
 	}
 }
@@ -113,7 +115,7 @@ void DailyPage::applyTheme(ThemeManager& theme) {
 		lv_obj_set_style_border_width(rowCards_[i], 0, LV_PART_MAIN);
 		lv_obj_add_style(rowLabels_[i], theme.bodyStyle(), LV_PART_MAIN);
 		lv_obj_add_style(rowTempLabels_[i], theme.titleStyle(), LV_PART_MAIN);
-		lv_obj_set_style_transform_zoom(rowTempLabels_[i], 118, LV_PART_MAIN);
+		lv_obj_set_style_transform_zoom(rowTempLabels_[i], 256, LV_PART_MAIN);
 
 		if (rowIcons_[i] != nullptr) {
 			ui_icon_delete(rowIcons_[i]);
@@ -128,14 +130,14 @@ void DailyPage::applyTheme(ThemeManager& theme) {
 	}
 }
 
-void DailyPage::update(const WeatherData& data) {
+void DailyPage::update(const WeatherData& data, bool imperial) {
 	if (subtitle_ != nullptr) {
 		if (data.lastError == WeatherErrorCode::NotConfigured) {
-			lv_label_set_text(subtitle_, "Setup required");
+			ui_label_set_text_if_changed(subtitle_, "Setup required");
 		} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-			lv_label_set_text(subtitle_, "Waiting for Wi-Fi");
+			ui_label_set_text_if_changed(subtitle_, "Waiting for Wi-Fi");
 		} else {
-			lv_label_set_text(subtitle_, "7-day outlook");
+			ui_label_set_text_if_changed(subtitle_, "7-day outlook");
 		}
 	}
 
@@ -153,8 +155,8 @@ void DailyPage::update(const WeatherData& data) {
 					rowIconSet_[i] = true;
 				}
 			}
-			lv_label_set_text(rowLabels_[i], i == 0 ? "Waiting for forecast\nDaily cards will fill after sync" : "No data");
-			lv_label_set_text(rowTempLabels_[i], "--");
+			ui_label_set_text_if_changed(rowLabels_[i], i == 0 ? "Waiting for forecast\nDaily cards will fill after sync" : "No data");
+			ui_label_set_text_if_changed(rowTempLabels_[i], format_temperature(NAN, imperial).c_str());
 			continue;
 		}
 
@@ -179,10 +181,10 @@ void DailyPage::update(const WeatherData& data) {
 		label += "  •  Rain ";
 		label += forecast.precipChancePct >= 0 ? String(forecast.precipChancePct) : String("--");
 		label += "%";
-		lv_label_set_text(rowLabels_[i], label.c_str());
+		ui_label_set_text_if_changed(rowLabels_[i], label.c_str());
 
-		String tempText = build_temp_range(forecast);
-		lv_label_set_text(rowTempLabels_[i], tempText.c_str());
+		String tempText = build_temp_range(forecast, imperial);
+		ui_label_set_text_if_changed(rowTempLabels_[i], tempText.c_str());
 	}
 }
 

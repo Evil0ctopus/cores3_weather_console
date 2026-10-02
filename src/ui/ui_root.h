@@ -26,13 +26,25 @@ class RootNavigator {
 	void setDebugOverlayText(const String& text);
 	void update(const WeatherData& data, weather::RadarEngine& radar, const SystemInfo& systemInfo);
 	uint8_t activePageIndex() const;
+	void showHome();
+	void openPage(uint8_t page, bool animated = true);
+	bool isPageFullyVisible() const;
 	void recenterActivePage(bool animated = false);
 	bool moveToAdjacentPage(int8_t delta, bool animated = true);
 
  private:
+	struct HubPageButtonContext {
+		RootNavigator* navigator = nullptr;
+		uint8_t page = 0;
+	};
+
 	lv_obj_t* tileForPage(uint8_t page) const;
+	static void onHubPageSelected(lv_event_t* event);
+	static void onHomeSelected(lv_event_t* event);
 	static void onThemeSelectedAdapter(void* userContext, ThemeId themeId);
 	void onThemeSelected(ThemeId themeId);
+	static void animateStorm(lv_timer_t* timer);
+	void styleHome();
 
 	ThemeManager theme_;
 	app::SettingsStore* settingsStore_ = nullptr;
@@ -64,7 +76,18 @@ class RootNavigator {
 	lv_obj_t* batteryHead_ = nullptr;
 	lv_obj_t* batteryText_ = nullptr;
 	lv_obj_t* batteryCharge_ = nullptr;
+	lv_obj_t* homePanel_ = nullptr;
+	lv_obj_t* homeBackdrop_ = nullptr;
+	lv_obj_t* homeTitle_ = nullptr;
+	lv_obj_t* stormSparks_[6] = {};
+	lv_timer_t* homeAnimation_ = nullptr;
+	lv_obj_t* homeReadout_ = nullptr;
+	lv_obj_t* homeButton_ = nullptr;
+	lv_obj_t* hubButtons_[6] = {};
+	HubPageButtonContext hubButtonContexts_[6] = {};
 	bool debugOverlayEnabled_ = false;
+	bool homeVisible_ = true;
+	bool weatherPagesPrimed_ = false;
 	uint8_t currentPageIndex_ = 0;
 };
 

@@ -359,6 +359,10 @@ size_t RadarEngine::currentAnimationIndex() const {
 	return currentAnimationIndex_;
 }
 
+uint32_t RadarEngine::displayRevision() const {
+	return displayRevision_;
+}
+
 const RadarFrameInfo* RadarEngine::frameInfo(size_t index) const {
 	if (index >= frameCount_) {
 		return nullptr;
@@ -448,6 +452,7 @@ bool RadarEngine::getCurrentFrameRaw(const uint8_t*& data, size_t& length, Radar
 }
 
 void RadarEngine::resetAll() {
+	++displayRevision_;
 	clearFrames();
 	frameCount_ = 0;
 	completedFrameCount_ = 0;
@@ -940,6 +945,7 @@ void RadarEngine::finalizeFrame() {
 	slot.info.height = finalizedHeight;
 
 	++completedFrameCount_;
+	++displayRevision_;
 	emitProgress("frame_done");
 	activeClient_.stop();
 	activeSecureClient_.stop();
@@ -972,6 +978,7 @@ void RadarEngine::advanceAnimation() {
 		return;
 	}
 	lastAnimationStepMs_ = now;
+	++displayRevision_;
 
 	if (visualConfig_.enableFrameInterpolation && visualConfig_.interpolationSteps > 0 && interpolationStep_ < visualConfig_.interpolationSteps) {
 		++interpolationStep_;
@@ -1486,6 +1493,7 @@ void RadarEngine::detectStormCells(const uint8_t* data,
 }
 
 void RadarEngine::invalidateDescriptors() {
+	++displayRevision_;
 	for (size_t index = 0; index < frameCount_; ++index) {
 		frames_[index].dscValid = false;
 	}

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SPIFFS.h>
+#include <esp_heap_caps.h>
 
 #include "ui_assets.h"
 
@@ -11,6 +12,38 @@ namespace {
 lv_obj_t* gBackgroundImage = nullptr;
 lv_obj_t* gBackgroundGlowTop = nullptr;
 lv_obj_t* gBackgroundGlowBottom = nullptr;
+lv_img_dsc_t gAuroraDescriptor = {};
+uint8_t* gAuroraPixels = nullptr;
+
+bool load_native_aurora(lv_obj_t* image) {
+	if (gAuroraPixels == nullptr) {
+		constexpr size_t kSize = 320U * 240U * sizeof(lv_color_t);
+		File file = SPIFFS.open("/backgrounds/aurora.rgb", FILE_READ);
+		if (!file || file.size() != kSize) {
+			Serial.println("[BG] Native aurora missing or invalid; using PNG fallback");
+			return false;
+		}
+		uint8_t* pixels = static_cast<uint8_t*>(heap_caps_malloc(kSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+		if (pixels == nullptr) {
+			Serial.println("[BG] Native aurora allocation failed; using PNG fallback");
+			return false;
+		}
+		if (file.read(pixels, kSize) != kSize) {
+			heap_caps_free(pixels);
+			Serial.println("[BG] Native aurora read failed; using PNG fallback");
+			return false;
+		}
+		gAuroraPixels = pixels;
+		gAuroraDescriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
+		gAuroraDescriptor.header.w = 320;
+		gAuroraDescriptor.header.h = 240;
+		gAuroraDescriptor.data_size = kSize;
+		gAuroraDescriptor.data = gAuroraPixels;
+		Serial.println("[BG] Native RGB565 aurora resident in PSRAM");
+	}
+	lv_img_set_src(image, &gAuroraDescriptor);
+	return true;
+}
 
 uint32_t mix_hex(uint32_t left, uint32_t right, uint8_t mix) {
 	const uint32_t invMix = 255U - mix;
@@ -94,7 +127,7 @@ const char* fallback_path_for_theme(ThemeId theme) {
 const char* path_for_theme(ThemeId theme) {
 	switch (theme) {
 		case ThemeId::PIXEL_STORM:
-			return "/backgrounds/pixel_storm.png";
+			return "/backgrounds/neon_aurora.png";
 		case ThemeId::DESERT_CALM:
 			return "/backgrounds/desert_calm.png";
 		case ThemeId::FUTURE_PULSE:
@@ -167,6 +200,17 @@ lv_obj_t* ui_background_create(lv_obj_t* root, ThemeId theme) {
 void ui_background_update(lv_obj_t* root, ThemeId theme) {
 	if (root == nullptr || gBackgroundImage == nullptr) {
 		return;
+	}
+	if (theme == ThemeId::PIXEL_STORM) {
+		lv_obj_add_flag(gBackgroundGlowTop, LV_OBJ_FLAG_HIDDEN);
+		lv_obj_add_flag(gBackgroundGlowBottom, LV_OBJ_FLAG_HIDDEN);
+		if (load_native_aurora(gBackgroundImage)) {
+			lv_obj_clear_flag(gBackgroundImage, LV_OBJ_FLAG_HIDDEN);
+			return;
+		}
+	} else {
+		lv_obj_clear_flag(gBackgroundGlowTop, LV_OBJ_FLAG_HIDDEN);
+		lv_obj_clear_flag(gBackgroundGlowBottom, LV_OBJ_FLAG_HIDDEN);
 	}
 
 	const char* preferred = path_for_theme(theme);

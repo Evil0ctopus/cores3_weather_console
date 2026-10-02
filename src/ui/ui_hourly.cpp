@@ -1,4 +1,5 @@
 #include "ui_hourly.h"
+#include "ui_units.h"
 
 #include <math.h>
 
@@ -62,7 +63,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 	lv_obj_add_style(obj, theme.titleStyle(), LV_PART_MAIN);
 	lv_obj_set_style_text_color(obj, theme.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_transform_zoom(obj, 115, LV_PART_MAIN);
+	lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_radius(obj, 8, LV_PART_MAIN);
@@ -142,7 +143,7 @@ void HourlyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		lv_obj_add_style(tempLabels_[i], theme.titleStyle(), LV_PART_MAIN);
 		lv_obj_set_width(tempLabels_[i], 58);
 		lv_obj_set_style_text_font(tempLabels_[i], &lv_font_montserrat_14, LV_PART_MAIN);
-		lv_obj_set_style_transform_zoom(tempLabels_[i], 145, LV_PART_MAIN);
+		lv_obj_set_style_transform_zoom(tempLabels_[i], 256, LV_PART_MAIN);
 		lv_label_set_text(tempLabels_[i], "--.- C");
 
 		detailLabels_[i] = lv_label_create(cards_[i]);
@@ -168,7 +169,7 @@ void HourlyPage::applyTheme(ThemeManager& theme) {
 		lv_obj_set_style_border_width(cards_[i], 0, LV_PART_MAIN);
 		lv_obj_add_style(timeLabels_[i], theme.captionStyle(), LV_PART_MAIN);
 		lv_obj_add_style(tempLabels_[i], theme.titleStyle(), LV_PART_MAIN);
-		lv_obj_set_style_transform_zoom(tempLabels_[i], 150, LV_PART_MAIN);
+		lv_obj_set_style_transform_zoom(tempLabels_[i], 256, LV_PART_MAIN);
 		lv_obj_add_style(detailLabels_[i], theme.captionStyle(), LV_PART_MAIN);
 
 		if (iconObjs_[i] != nullptr) {
@@ -184,14 +185,14 @@ void HourlyPage::applyTheme(ThemeManager& theme) {
 	}
 }
 
-void HourlyPage::update(const WeatherData& data) {
+void HourlyPage::update(const WeatherData& data, bool imperial) {
 	if (subtitle_ != nullptr) {
 		if (data.lastError == WeatherErrorCode::NotConfigured) {
-			lv_label_set_text(subtitle_, "Setup required");
+			ui_label_set_text_if_changed(subtitle_, "Setup required");
 		} else if (data.lastError == WeatherErrorCode::WifiDisconnected) {
-			lv_label_set_text(subtitle_, "Waiting for Wi-Fi");
+			ui_label_set_text_if_changed(subtitle_, "Waiting for Wi-Fi");
 		} else {
-			lv_label_set_text(subtitle_, "Next 14 hour trend");
+			ui_label_set_text_if_changed(subtitle_, "Next 14 hour trend");
 		}
 	}
 
@@ -199,7 +200,7 @@ void HourlyPage::update(const WeatherData& data) {
 	lastIsDaylight_ = data.current.isDaylight;
 
 	for (size_t i = 0; i < 8; ++i) {
-		lv_label_set_text(timeLabels_[i], kHourLabels[i]);
+		ui_label_set_text_if_changed(timeLabels_[i], kHourLabels[i]);
 
 		bool daylight = true;
 		IconId iconId = estimate_icon(data, i, daylight);
@@ -217,11 +218,11 @@ void HourlyPage::update(const WeatherData& data) {
 		}
 
 		const float temp = estimate_hourly_temp(data, i);
-		String tempText = String(temp, 1) + " C";
+		String tempText = format_temperature(temp, imperial, 1);
 		if (!data.current.valid && data.forecastCount == 0) {
-			tempText = "--.- C";
+			tempText = format_temperature(NAN, imperial, 1);
 		}
-		lv_label_set_text(tempLabels_[i], tempText.c_str());
+		ui_label_set_text_if_changed(tempLabels_[i], tempText.c_str());
 
 		String detail;
 		if (!data.current.valid && data.forecastCount == 0) {
@@ -234,10 +235,9 @@ void HourlyPage::update(const WeatherData& data) {
 			if (isnan(wind)) {
 				wind = 6.0f + static_cast<float>(i);
 			}
-			detail += String(wind + static_cast<float>(i) * 0.6f, 0);
-			detail += "k";
+			detail += format_wind(wind + static_cast<float>(i) * 0.6f, imperial);
 		}
-		lv_label_set_text(detailLabels_[i], detail.c_str());
+		ui_label_set_text_if_changed(detailLabels_[i], detail.c_str());
 	}
 }
 

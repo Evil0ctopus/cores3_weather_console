@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <new>
 #include <stdlib.h>
 
 namespace weather {
@@ -80,7 +81,228 @@ int parseTimezoneOffsetMinutes(const String& isoText) {
 
 WeatherApi::WeatherApi() = default;
 
+bool WeatherApi::initializeHttpWorker() {
+	if (workerTask_ != nullptr) {
+		return true;
+	}
+
+	requestQueue_ = xQueueCreate(1, sizeof(HttpRequest*));
+	responseQueue_ = xQueueCreate(1, sizeof(HttpResponse*));
+	if (requestQueue_ == nullptr || responseQueue_ == nullptr) {
+		if (requestQueue_ != nullptr) {
+			vQueueDelete(requestQueue_);
+			requestQueue_ = nullptr;
+		}
+		if (responseQueue_ != nullptr) {
+			vQueueDelete(responseQueue_);
+			responseQueue_ = nullptr;
+		}
+		return false;
+	}
+
+	const BaseType_t taskCreated = xTaskCreatePinnedToCore(
+		httpWorkerTask, "weather-http", 8192, this, 1, &workerTask_, 0);
+	if (taskCreated != pdPASS) {
+		vQueueDelete(requestQueue_);
+		vQueueDelete(responseQueue_);
+		requestQueue_ = nullptr;
+		responseQueue_ = nullptr;
+		workerTask_ = nullptr;
+		return false;
+	}
+	return true;
+}
+
+void WeatherApi::httpWorkerTask(void* context) {
+	static_cast<WeatherApi*>(context)->runHttpWorker();
+}
+
+void WeatherApi::runHttpWorker() {
+	for (;;) {
+		HttpRequest* request = nullptr;
+		if (xQueueReceive(requestQueue_, &request, portMAX_DELAY) != pdTRUE || request == nullptr) {
+			continue;
+		}
+
+		HttpResponse* response = new (std::nothrow) HttpResponse();
+		if (response != nullptr) {
+			HTTPClient http;
+			const bool secure = request->url.startsWith("https://");
+			WiFiClient client;
+			WiFiClientSecure secureClient;
+			bool beginOk = false;
+			if (secure) {
+				secureClient.setInsecure();
+				beginOk = http.begin(secureClient, request->url);
+			} else {
+				beginOk = http.begin(client, request->url);
+			}
+
+			if (!beginOk) {
+				response->error = WeatherErrorCode::HttpBeginFailed;
+				response->errorMessage = "http.begin failed";
+			} else {
+				http.setConnectTimeout(request->connectTimeoutMs);
+				http.setTimeout(request->requestTimeoutMs);
+				http.addHeader("Accept", "application/json");
+				response->httpStatus = http.GET();
+				if (response->httpStatus < 200 || response->httpStatus >= 300) {
+					response->error = WeatherErrorCode::HttpStatusError;
+					response->errorMessage = "http status " + String(response->httpStatus);
+				} else {
+					response->payload = http.getString();
+				}
+				http.end();
+			}
+		}
+
+		delete request;
+		xQueueSend(responseQueue_, &response, portMAX_DELAY);
+	}
+}
+
+bool WeatherApi::enqueueHttpRequest(const String& url, RequestKind kind, UpdateTask task, uint32_t nowMs) {
+	if (requestQueue_ == nullptr || requestInFlight_) {
+		return false;
+	}
+
+	HttpRequest* request = new (std::nothrow) HttpRequest();
+	if (request == nullptr) {
+		setError(WeatherErrorCode::HttpBeginFailed, "weather request allocation failed");
+		return false;
+	}
+	request->url = url;
+	request->connectTimeoutMs = config_.connectTimeoutMs;
+	request->requestTimeoutMs = config_.requestTimeoutMs;
+	if (xQueueSend(requestQueue_, &request, 0) != pdTRUE) {
+		delete request;
+		setError(WeatherErrorCode::HttpBeginFailed, "weather request queue unavailable");
+		return false;
+	}
+
+	activeRequestKind_ = kind;
+	activeUpdateTask_ = task;
+	activeGeneration_ = configGeneration_;
+	lastRequestAtMs_ = nowMs;
+	lastTask_ = task;
+	requestInFlight_ = true;
+	return true;
+}
+
+void WeatherApi::processHttpResponse() {
+	if (responseQueue_ == nullptr) {
+		return;
+	}
+
+	HttpResponse* response = nullptr;
+	if (xQueueReceive(responseQueue_, &response, 0) != pdTRUE) {
+		return;
+	}
+	requestInFlight_ = false;
+	if (activeGeneration_ != configGeneration_) {
+		delete response;
+		return;
+	}
+	if (response == nullptr) {
+		setError(WeatherErrorCode::HttpBeginFailed, "weather response allocation failed");
+		return;
+	}
+	if (response->error != WeatherErrorCode::None) {
+		setError(response->error, response->errorMessage, response->httpStatus);
+		delete response;
+		return;
+	}
+
+	if (activeRequestKind_ != RequestKind::Weather) {
+		if (processGeocodeResponse(response->payload, activeRequestKind_ == RequestKind::OpenMeteoGeocode)) {
+			clearError();
+		}
+		delete response;
+		return;
+	}
+
+	const uint32_t completedAtMs = millis();
+	bool parsed = false;
+	if (activeUpdateTask_ == UpdateTask::Current) {
+		if (usingOpenMeteo()) {
+			parsed = parseCurrent(response->payload) && parseForecast(response->payload);
+			if (parsed) {
+				data_.currentFetchedAtMs = completedAtMs;
+				data_.forecastFetchedAtMs = completedAtMs;
+			}
+		} else {
+			parsed = parseCurrent(response->payload);
+			if (parsed) {
+				data_.currentFetchedAtMs = completedAtMs;
+			}
+		}
+	} else if (activeUpdateTask_ == UpdateTask::Forecast) {
+		parsed = parseForecast(response->payload);
+		if (parsed) {
+			data_.forecastFetchedAtMs = completedAtMs;
+		}
+	} else if (activeUpdateTask_ == UpdateTask::Alerts) {
+		parsed = parseAlerts(response->payload);
+		if (parsed) {
+			data_.alertsFetchedAtMs = completedAtMs;
+		}
+	} else if (activeUpdateTask_ == UpdateTask::Radar) {
+		parsed = parseRadar(response->payload);
+		if (parsed) {
+			data_.radarFetchedAtMs = completedAtMs;
+			radarChanged_ = true;
+		}
+	}
+
+	if (parsed) {
+		forceRefresh_ = false;
+		data_.lastCycleAtMs = completedAtMs;
+		clearError();
+	}
+	delete response;
+}
+
+bool WeatherApi::processGeocodeResponse(const String& payload, bool openMeteo) {
+	JsonDocument doc;
+	if (deserializeJson(doc, payload) != DeserializationError::Ok) {
+		setError(WeatherErrorCode::JsonParseError, "geocode parse failed");
+		return false;
+	}
+
+	JsonArray results = doc["results"].as<JsonArray>();
+	if (results.isNull() || results.size() == 0) {
+		setError(WeatherErrorCode::ResponseShapeError, "geocode results missing");
+		return false;
+	}
+
+	JsonObject first = results[0].as<JsonObject>();
+	resolvedLatitude_ = first["latitude"] | NAN;
+	resolvedLongitude_ = first["longitude"] | NAN;
+	if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_) ||
+		fabsf(resolvedLatitude_) > 90.0f || fabsf(resolvedLongitude_) > 180.0f) {
+		setError(WeatherErrorCode::ResponseShapeError, "geocode coordinates missing");
+		return false;
+	}
+
+	if (openMeteo) {
+		config_.locationKey = String(resolvedLatitude_, 4) + "," + String(resolvedLongitude_, 4);
+		data_.locationKey = config_.locationKey;
+	}
+	if (data_.locationName.length() == 0) {
+		data_.locationName = String(static_cast<const char*>(first["name"] | ""));
+		const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
+		if (admin1.length() > 0) {
+			data_.locationName += ", " + admin1;
+		}
+		if (data_.locationName.length() == 0) {
+			data_.locationName = config_.locationQuery;
+		}
+	}
+	return updateRadarTileProjection();
+}
+
 bool WeatherApi::begin(const WeatherApiConfig& config) {
+	++configGeneration_;
 	config_ = config;
 	configured_ = isConfigured();
 	forceRefresh_ = true;
@@ -93,6 +315,10 @@ bool WeatherApi::begin(const WeatherApiConfig& config) {
 	data_.locationKey = config_.locationKey;
 	data_.locationName = config_.locationQuery;
 	data_.provider = usingOpenMeteo() ? "OpenMeteo" : "AccuWeatherStyle";
+	if (!initializeHttpWorker()) {
+		setError(WeatherErrorCode::HttpBeginFailed, "weather worker initialization failed");
+		return false;
+	}
 
 	if (!configured_) {
 		setError(WeatherErrorCode::NotConfigured, "weather location not configured");
@@ -108,16 +334,13 @@ void WeatherApi::requestRefresh() {
 }
 
 void WeatherApi::update() {
+	processHttpResponse();
+	if (requestInFlight_) {
+		return;
+	}
 	if (!configured_) {
 		setError(WeatherErrorCode::NotConfigured, "weather module not configured");
 		return;
-	}
-
-	if (usingOpenMeteo() && !ensureOpenMeteoLocationResolved()) {
-		return;
-	}
-	if (!usingOpenMeteo() && !isnan(resolvedLatitude_) && !isnan(resolvedLongitude_)) {
-		data_.locationKey = config_.locationKey;
 	}
 
 	if (WiFi.status() != WL_CONNECTED) {
@@ -132,6 +355,24 @@ void WeatherApi::update() {
 	if ((now - lastRequestAtMs_) < config_.minRequestGapMs) {
 		return;
 	}
+	if (usingOpenMeteo() && (isnan(resolvedLatitude_) || isnan(resolvedLongitude_))) {
+		float latitude = 0.0f;
+		float longitude = 0.0f;
+		if (parseLocationCoordinates(latitude, longitude)) {
+			resolvedLatitude_ = latitude;
+			resolvedLongitude_ = longitude;
+			data_.locationKey = config_.locationKey;
+			updateRadarTileProjection();
+		} else {
+			const String endpoint = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+				urlEncode(config_.locationQuery) + "&count=1&language=en&format=json";
+			enqueueHttpRequest(endpoint, RequestKind::OpenMeteoGeocode, UpdateTask::Idle, now);
+			return;
+		}
+	}
+	if (!usingOpenMeteo() && !isnan(resolvedLatitude_) && !isnan(resolvedLongitude_)) {
+		data_.locationKey = config_.locationKey;
+	}
 
 	const UpdateTask task = chooseTask(now);
 	if (task == UpdateTask::Idle) {
@@ -140,10 +381,21 @@ void WeatherApi::update() {
 
 	String endpoint;
 	if (task == UpdateTask::Radar) {
-		if (!ensureLocationCoordinatesResolved()) {
-			return;
+		if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_)) {
+			float latitude = 0.0f;
+			float longitude = 0.0f;
+			if (parseLocationCoordinates(latitude, longitude)) {
+				resolvedLatitude_ = latitude;
+				resolvedLongitude_ = longitude;
+				updateRadarTileProjection();
+			} else {
+				const String endpoint = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+					urlEncode(config_.locationQuery) + "&count=1&language=en&format=json";
+				enqueueHttpRequest(endpoint, RequestKind::RadarGeocode, UpdateTask::Idle, now);
+				return;
+			}
 		}
-		endpoint = "http://api.rainviewer.com/public/weather-maps.json";
+		endpoint = "https://api.rainviewer.com/public/weather-maps.json";
 	} else if (usingOpenMeteo()) {
 		if (task == UpdateTask::Alerts) {
 			data_.alertCount = 0;
@@ -162,58 +414,15 @@ void WeatherApi::update() {
 		endpoint = config_.baseUrl + "/alerts/v1/" + config_.locationKey +
 							 "?language=" + config_.language + buildAuthQuery();
 	} else {
-		if (!ensureLocationCoordinatesResolved()) {
-			return;
-		}
-		endpoint = "http://api.rainviewer.com/public/weather-maps.json";
+		endpoint = "https://api.rainviewer.com/public/weather-maps.json";
 	}
 
-	String payload;
-	int httpStatus = 0;
-	lastRequestAtMs_ = now;
-	lastTask_ = task;
-
-	if (!fetchJson(endpoint, payload, httpStatus)) {
+	if (usingOpenMeteo() && task == UpdateTask::Alerts) {
+		data_.alertCount = 0;
+		data_.alertsFetchedAtMs = now;
 		return;
 	}
-
-	bool parsed = false;
-	if (task == UpdateTask::Current) {
-		if (usingOpenMeteo()) {
-			parsed = parseCurrent(payload) && parseForecast(payload);
-			if (parsed) {
-				data_.currentFetchedAtMs = now;
-				data_.forecastFetchedAtMs = now;
-			}
-		} else {
-			parsed = parseCurrent(payload);
-			if (parsed) {
-				data_.currentFetchedAtMs = now;
-			}
-		}
-	} else if (task == UpdateTask::Forecast) {
-		parsed = parseForecast(payload);
-		if (parsed) {
-			data_.forecastFetchedAtMs = now;
-		}
-	} else if (task == UpdateTask::Alerts) {
-		parsed = parseAlerts(payload);
-		if (parsed) {
-			data_.alertsFetchedAtMs = now;
-		}
-	} else if (task == UpdateTask::Radar) {
-		parsed = parseRadar(payload);
-		if (parsed) {
-			data_.radarFetchedAtMs = now;
-			radarChanged_ = true;
-		}
-	}
-
-	if (parsed) {
-		forceRefresh_ = false;
-		data_.lastCycleAtMs = now;
-		clearError();
-	}
+	enqueueHttpRequest(endpoint, RequestKind::Weather, task, now);
 }
 
 const WeatherData& WeatherApi::data() const {
@@ -257,68 +466,6 @@ bool WeatherApi::isConfigured() const {
 
 bool WeatherApi::usingOpenMeteo() const {
 	return config_.apiKey.length() == 0;
-}
-
-bool WeatherApi::ensureLocationCoordinatesResolved() {
-	if (!isnan(resolvedLatitude_) && !isnan(resolvedLongitude_)) {
-		return updateRadarTileProjection();
-	}
-
-	float lat = 0.0f;
-	float lon = 0.0f;
-	if (parseLocationCoordinates(lat, lon)) {
-		resolvedLatitude_ = lat;
-		resolvedLongitude_ = lon;
-		return updateRadarTileProjection();
-	}
-
-	if (config_.locationQuery.length() == 0) {
-		setError(WeatherErrorCode::NotConfigured, "weather location not configured");
-		return false;
-	}
-
-	String payload;
-	int httpStatus = 0;
-	const String endpoint = "http://geocoding-api.open-meteo.com/v1/search?name=" + urlEncode(config_.locationQuery) + "&count=1&language=en&format=json";
-	if (!fetchJson(endpoint, payload, httpStatus)) {
-		return false;
-	}
-
-	JsonDocument doc;
-	if (deserializeJson(doc, payload) != DeserializationError::Ok) {
-		setError(WeatherErrorCode::JsonParseError, "geocode parse failed");
-		return false;
-	}
-
-	JsonArray results = doc["results"].as<JsonArray>();
-	if (results.isNull() || results.size() == 0) {
-		setError(WeatherErrorCode::ResponseShapeError, "geocode results missing");
-		return false;
-	}
-
-	JsonObject first = results[0].as<JsonObject>();
-	resolvedLatitude_ = first["latitude"] | NAN;
-	resolvedLongitude_ = first["longitude"] | NAN;
-	if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_)) {
-		setError(WeatherErrorCode::ResponseShapeError, "geocode coordinates missing");
-		return false;
-	}
-
-	if (usingOpenMeteo()) {
-		config_.locationKey = String(resolvedLatitude_, 4) + "," + String(resolvedLongitude_, 4);
-		data_.locationKey = config_.locationKey;
-	}
-	if (data_.locationName.length() == 0) {
-		data_.locationName = String(static_cast<const char*>(first["name"] | ""));
-		const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
-		if (admin1.length() > 0) {
-			data_.locationName += ", " + admin1;
-		}
-		if (data_.locationName.length() == 0) {
-			data_.locationName = config_.locationQuery;
-		}
-	}
-	return updateRadarTileProjection();
 }
 
 bool WeatherApi::updateRadarTileProjection(uint8_t radarZoom, int* outTileX, int* outTileY) {
@@ -371,10 +518,6 @@ bool WeatherApi::updateRadarTileProjection(uint8_t radarZoom, int* outTileX, int
 	return true;
 }
 
-bool WeatherApi::ensureOpenMeteoLocationResolved() {
-	return ensureLocationCoordinatesResolved();
-}
-
 bool WeatherApi::parseLocationCoordinates(float& outLat, float& outLon) const {
 	const int comma = config_.locationKey.indexOf(',');
 	if (comma <= 0 || comma >= (config_.locationKey.length() - 1)) {
@@ -415,41 +558,6 @@ String WeatherApi::buildOpenMeteoForecastUrl() const {
 
 String WeatherApi::buildAuthQuery() const {
 	return "&apikey=" + config_.apiKey;
-}
-
-bool WeatherApi::fetchJson(const String& url, String& payload, int& httpStatus) {
-	HTTPClient http;
-	const bool secure = url.startsWith("https://");
-	WiFiClient client;
-	WiFiClientSecure secureClient;
-	if (secure) {
-		secureClient.setInsecure();
-		if (!http.begin(secureClient, url)) {
-			setError(WeatherErrorCode::HttpBeginFailed, "http.begin failed");
-			return false;
-		}
-	} else {
-		if (!http.begin(client, url)) {
-			setError(WeatherErrorCode::HttpBeginFailed, "http.begin failed");
-			return false;
-		}
-	}
-
-	http.setConnectTimeout(config_.connectTimeoutMs);
-	http.setTimeout(config_.requestTimeoutMs);
-	http.addHeader("Accept", "application/json");
-	httpStatus = http.GET();
-
-	if (httpStatus < 200 || httpStatus >= 300) {
-		String body = http.getString();
-		http.end();
-		setError(WeatherErrorCode::HttpStatusError, "http status " + String(httpStatus) + " body=" + body, httpStatus);
-		return false;
-	}
-
-	payload = http.getString();
-	http.end();
-	return true;
 }
 
 bool WeatherApi::parseCurrent(const String& payload) {
@@ -738,7 +846,8 @@ bool WeatherApi::parseRadar(const String& payload) {
 		return false;
 	}
 
-	if (!ensureLocationCoordinatesResolved()) {
+	if (isnan(resolvedLatitude_) || isnan(resolvedLongitude_)) {
+		setError(WeatherErrorCode::ResponseShapeError, "radar location unresolved");
 		return false;
 	}
 

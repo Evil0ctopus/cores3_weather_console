@@ -5,6 +5,9 @@ const state = {
   saveTimer: null,
   previewTimer: null,
   wifiStatusTimer: null,
+  remoteScreenTimer: null,
+  remoteScreenBusy: false,
+  remoteTouchLastSentAt: 0,
   eventSource: null,
   eventStreamOpen: false,
   saveInFlight: false,
@@ -64,6 +67,14 @@ const elements = {
   debugConsoleOutput: document.getElementById('debugConsoleOutput'),
   exportDebugLogs: document.getElementById('exportDebugLogs'),
   clearDebugLogs: document.getElementById('clearDebugLogs'),
+  remoteScreen: document.getElementById('remoteScreen'),
+  remotePlaceholder: document.getElementById('remotePlaceholder'),
+  remoteStatus: document.getElementById('remoteStatus'),
+  remotePage: document.getElementById('remotePage'),
+  remoteGoPage: document.getElementById('remoteGoPage'),
+  remoteSound: document.getElementById('remoteSound'),
+  remoteRefresh: document.getElementById('remoteRefresh'),
+  remoteAutoRefresh: document.getElementById('remoteAutoRefresh'),
 };
 
 function setMessage(text, kind = '') {
@@ -88,12 +99,13 @@ function applyPageTheme(themeSetting, deviceTheme) {
   const resolved = resolveTheme(themeSetting, deviceTheme);
   const lightThemes = new Set(['desert_calm', 'daybreak_clear']);
   document.body.dataset.theme = lightThemes.has(resolved) ? 'light' : 'dark';
+  document.body.dataset.palette = resolved;
 }
 
 function themeLabel(theme) {
   switch (theme) {
     case 'pixel_storm':
-      return 'Pixel Storm';
+      return 'Neon Storm';
     case 'desert_calm':
       return 'Desert Calm';
     case 'future_pulse':
@@ -113,7 +125,7 @@ function themeLabel(theme) {
     case 'infrared_scan':
       return 'Infrared Scan';
     default:
-      return 'Pixel Storm';
+      return 'Neon Storm';
   }
 }
 
@@ -608,6 +620,80 @@ function stopWifiStatusPolling() {
   state.wifiStatusTimer = null;
 }
 
+function setRemoteStatus(text, stateName = '') {
+  elements.remoteStatus.textContent = text;
+  elements.remoteStatus.dataset.state = stateName;
+}
+
+function refreshRemoteScreen() {
+  if (state.remoteScreenBusy || document.hidden) {
+    return;
+  }
+
+  state.remoteScreenBusy = true;
+  elements.remoteScreen.onload = () => {
+    state.remoteScreenBusy = false;
+    elements.remoteScreen.classList.add('is-live');
+    elements.remotePlaceholder.hidden = true;
+    setRemoteStatus(`LIVE / ${new Date().toLocaleTimeString()}`, 'live');
+  };
+  elements.remoteScreen.onerror = () => {
+    state.remoteScreenBusy = false;
+    elements.remoteScreen.classList.remove('is-live');
+    elements.remotePlaceholder.hidden = false;
+    elements.remotePlaceholder.textContent = 'DEVICE SCREEN UNAVAILABLE';
+    setRemoteStatus('DEVICE UNAVAILABLE', 'error');
+  };
+  elements.remoteScreen.src = `/api/device/screen?t=${Date.now()}`;
+}
+
+function startRemoteScreenPolling() {
+  if (state.remoteScreenTimer || !elements.remoteAutoRefresh.checked) {
+    return;
+  }
+  refreshRemoteScreen();
+  state.remoteScreenTimer = setInterval(refreshRemoteScreen, 1500);
+}
+
+function stopRemoteScreenPolling() {
+  if (!state.remoteScreenTimer) {
+    return;
+  }
+  clearInterval(state.remoteScreenTimer);
+  state.remoteScreenTimer = null;
+}
+
+async function sendRemoteCommand(values) {
+  const response = await fetch('/api/device/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: new URLSearchParams(values),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'Device command failed.');
+  }
+}
+
+function remoteTouchPoint(event) {
+  const bounds = elements.remoteScreen.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(319, Math.floor((event.clientX - bounds.left) * 320 / bounds.width))),
+    y: Math.max(0, Math.min(239, Math.floor((event.clientY - bounds.top) * 240 / bounds.height))),
+  };
+}
+
+function sendRemoteTouch(event, pressed) {
+  const now = performance.now();
+  if (pressed && event.type === 'pointermove' && (now - state.remoteTouchLastSentAt) < 50) {
+    return;
+  }
+  state.remoteTouchLastSentAt = now;
+  const point = remoteTouchPoint(event);
+  sendRemoteCommand({ action: 'touch', ...point, state: pressed ? 'down' : 'up' })
+    .catch((error) => setRemoteStatus(error.message, 'error'));
+}
+
 function connectEventStream() {
   if (!('EventSource' in window) || state.eventSource) {
     if (!('EventSource' in window)) {
@@ -731,6 +817,37 @@ function bindEvents() {
     exportDebugLogs();
   });
 
+  elements.remoteRefresh.addEventListener('click', refreshRemoteScreen);
+  elements.remoteAutoRefresh.addEventListener('change', () => {
+    if (elements.remoteAutoRefresh.checked) {
+      startRemoteScreenPolling();
+    } else {
+      stopRemoteScreenPolling();
+    }
+  });
+  elements.remoteGoPage.addEventListener('click', () => {
+    sendRemoteCommand({ action: 'page', page: elements.remotePage.value })
+      .then(() => setRemoteStatus('COMMAND SENT', 'live'))
+      .catch((error) => setRemoteStatus(error.message, 'error'));
+  });
+  elements.remoteSound.addEventListener('click', () => {
+    sendRemoteCommand({ action: 'sound' })
+      .then(() => setRemoteStatus('SPEAKER TEST SENT', 'live'))
+      .catch((error) => setRemoteStatus(error.message, 'error'));
+  });
+  elements.remoteScreen.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    elements.remoteScreen.setPointerCapture(event.pointerId);
+    sendRemoteTouch(event, true);
+  });
+  elements.remoteScreen.addEventListener('pointermove', (event) => {
+    if (event.buttons > 0) {
+      sendRemoteTouch(event, true);
+    }
+  });
+  elements.remoteScreen.addEventListener('pointerup', (event) => sendRemoteTouch(event, false));
+  elements.remoteScreen.addEventListener('pointercancel', (event) => sendRemoteTouch(event, false));
+
   elements.wifiScanButton.addEventListener('click', () => {
     scanWifiNetworks().catch(() => {
       setMessage('WiFi scan failed.', 'error');
@@ -790,6 +907,7 @@ function bindEvents() {
     if (document.hidden) {
       stopPreviewPolling();
       stopWifiStatusPolling();
+      stopRemoteScreenPolling();
       return;
     }
 
@@ -797,6 +915,9 @@ function bindEvents() {
       startPreviewPolling();
     }
     startWifiStatusPolling();
+    if (elements.remoteAutoRefresh.checked) {
+      startRemoteScreenPolling();
+    }
     loadPreview().catch(() => {});
     loadWifiStatus().catch(() => {});
   });
@@ -820,6 +941,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  startRemoteScreenPolling();
   try {
     await loadSettings();
     await loadWifiStatus();
@@ -830,6 +952,7 @@ async function init() {
       startPreviewPolling();
     }
     startWifiStatusPolling();
+    startRemoteScreenPolling();
   } catch (error) {
     setMessage(error?.message || 'Failed to load device state.', 'error');
   }

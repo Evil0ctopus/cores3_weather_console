@@ -1,6 +1,9 @@
 #pragma once
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 #include "weather_models.h"
 
@@ -47,11 +50,31 @@ class WeatherApi {
 		Alerts,
 		Radar,
 	};
+	enum class RequestKind : uint8_t {
+		Weather,
+		OpenMeteoGeocode,
+		RadarGeocode,
+	};
+	struct HttpRequest {
+		String url;
+		uint32_t connectTimeoutMs = 0;
+		uint32_t requestTimeoutMs = 0;
+	};
+	struct HttpResponse {
+		String payload;
+		String errorMessage;
+		int httpStatus = 0;
+		WeatherErrorCode error = WeatherErrorCode::None;
+	};
 
 	bool isConfigured() const;
 	bool usingOpenMeteo() const;
-	bool ensureOpenMeteoLocationResolved();
-	bool ensureLocationCoordinatesResolved();
+	bool initializeHttpWorker();
+	void runHttpWorker();
+	static void httpWorkerTask(void* context);
+	bool enqueueHttpRequest(const String& url, RequestKind kind, UpdateTask task, uint32_t nowMs);
+	void processHttpResponse();
+	bool processGeocodeResponse(const String& payload, bool openMeteo);
 	bool updateRadarTileProjection(uint8_t radarZoom = 7, int* outTileX = nullptr, int* outTileY = nullptr);
 	bool parseLocationCoordinates(float& outLat, float& outLon) const;
 	String buildOpenMeteoForecastUrl() const;
@@ -59,7 +82,6 @@ class WeatherApi {
 	int openMeteoIconFromCode(int weatherCode, bool isDaylight) const;
 	String buildAuthQuery() const;
 
-	bool fetchJson(const String& url, String& payload, int& httpStatus);
 	bool parseCurrent(const String& payload);
 	bool parseForecast(const String& payload);
 	bool parseAlerts(const String& payload);
@@ -79,6 +101,14 @@ class WeatherApi {
 	uint32_t lastRequestAtMs_ = 0;
 	uint32_t nextAllowedAttemptMs_ = 0;
 	UpdateTask lastTask_ = UpdateTask::Idle;
+	RequestKind activeRequestKind_ = RequestKind::Weather;
+	UpdateTask activeUpdateTask_ = UpdateTask::Idle;
+	QueueHandle_t requestQueue_ = nullptr;
+	QueueHandle_t responseQueue_ = nullptr;
+	TaskHandle_t workerTask_ = nullptr;
+	bool requestInFlight_ = false;
+	uint32_t configGeneration_ = 0;
+	uint32_t activeGeneration_ = 0;
 	float resolvedLatitude_ = NAN;
 	float resolvedLongitude_ = NAN;
 };

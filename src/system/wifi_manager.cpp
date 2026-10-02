@@ -65,7 +65,7 @@ void WifiManager::update() {
 	if (!initialized_) {
 		return;
 	}
-	if (WiFi.status() != WL_CONNECTED && config_.autoConnect && hasUsableConfig(config_)) {
+	if (!scanInProgress_ && WiFi.status() != WL_CONNECTED && config_.autoConnect && hasUsableConfig(config_)) {
 		const uint32_t nowMs = millis();
 		if ((nowMs - lastAttemptAtMs_) >= config_.reconnectIntervalMs) {
 			connectNow(nowMs);
@@ -163,6 +163,9 @@ bool WifiManager::startScan() {
 	}
 
 	WiFi.scanDelete();
+	if (!connected()) {
+		WiFi.disconnect(false, false);
+	}
 	scanResultCount_ = 0;
 	scanStartedAtMs_ = millis();
 	const int startResult = WiFi.scanNetworks(true, true, false, kScanMaxMsPerChannel);

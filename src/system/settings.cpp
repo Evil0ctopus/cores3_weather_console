@@ -114,13 +114,18 @@ bool SettingsStore::saveWifiSettings(const String& ssid, const String& password,
 		return false;
 	}
 
-	settings_.wifiSsid = normalized(ssid);
+	const String cleanSsid = normalized(ssid);
+	const bool written = prefs.putString(kKeyWifiSsid, cleanSsid) == cleanSsid.length() &&
+		prefs.putString(kKeyWifiPassword, password) == password.length() &&
+		prefs.putBool(kKeyWifiAutoConnect, autoConnect) == sizeof(uint8_t);
+	prefs.end();
+	if (!written) {
+		Serial.println("[SETTINGS] ERROR: could not persist WiFi settings.");
+		return false;
+	}
+	settings_.wifiSsid = cleanSsid;
 	settings_.wifiPassword = password;
 	settings_.wifiAutoConnect = autoConnect;
-	prefs.putString(kKeyWifiSsid, settings_.wifiSsid);
-	prefs.putString(kKeyWifiPassword, settings_.wifiPassword);
-	prefs.putBool(kKeyWifiAutoConnect, settings_.wifiAutoConnect);
-	prefs.end();
 	++revision_;
 	return true;
 }
@@ -137,9 +142,24 @@ bool SettingsStore::set_theme(ui::ThemeId theme) {
 	if (!initialized_) {
 		begin();
 	}
-	AppSettings next = settings_;
-	next.theme = theme;
-	return save(next);
+	if (static_cast<uint8_t>(theme) >= ui::theme_count()) {
+		Serial.println("[SETTINGS] ERROR: invalid theme.");
+		return false;
+	}
+	Preferences prefs;
+	if (!prefs.begin(kNamespace, false)) {
+		Serial.println("[SETTINGS] ERROR: could not open theme preferences.");
+		return false;
+	}
+	const size_t written = prefs.putUChar(kKeyTheme, static_cast<uint8_t>(theme));
+	prefs.end();
+	if (written != sizeof(uint8_t)) {
+		Serial.println("[SETTINGS] ERROR: could not persist theme.");
+		return false;
+	}
+	settings_.theme = theme;
+	++revision_;
+	return true;
 }
 
 uint32_t SettingsStore::revision() const {
