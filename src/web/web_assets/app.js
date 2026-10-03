@@ -13,6 +13,8 @@ const state = {
   saveInFlight: false,
   queuedSave: false,
   lastSerialized: '',
+  controlFields: [],
+  dirtyFields: new Set(),
   debugPayload: null,
 };
 
@@ -75,7 +77,68 @@ const elements = {
   remoteSound: document.getElementById('remoteSound'),
   remoteRefresh: document.getElementById('remoteRefresh'),
   remoteAutoRefresh: document.getElementById('remoteAutoRefresh'),
+  controlCenter: document.getElementById('controlCenter'),
+  weatherRefresh: document.getElementById('weatherRefresh'),
+  deviceRestart: document.getElementById('deviceRestart'),
 };
+
+function createControlFields(schema) {
+  if (state.controlFields.length || !Array.isArray(schema)) return;
+  const groups = new Map();
+  schema.forEach((field) => {
+    if (!groups.has(field.group)) {
+      const section = document.createElement('section');
+      section.className = 'control-group';
+      const heading = document.createElement('h3');
+      heading.textContent = field.group;
+      section.appendChild(heading);
+      const grid = document.createElement('div');
+      grid.className = 'grid two-up';
+      section.appendChild(grid);
+      elements.controlCenter.appendChild(section);
+      groups.set(field.group, grid);
+    }
+    const label = document.createElement('label');
+    label.className = field.type === 'boolean' ? 'field checkbox-field' : 'field';
+    const caption = document.createElement('span');
+    caption.textContent = field.label;
+    label.appendChild(caption);
+    const input = document.createElement(field.type === 'choice' ? 'select' : 'input');
+    input.id = field.key;
+    input.name = field.key;
+    if (field.type === 'choice') {
+      field.options.forEach((option) => {
+        const node = document.createElement('option');
+        node.value = option.value;
+        node.textContent = option.label;
+        input.appendChild(node);
+      });
+    } else {
+      input.type = field.type === 'boolean' ? 'checkbox' : 'number';
+      if (field.type === 'number') {
+        input.min = field.min;
+        input.max = field.max;
+        input.step = '1';
+        input.required = true;
+      }
+    }
+    input.addEventListener('change', () => {
+      if (!input.checkValidity()) {
+        setMessage(`${field.label}: enter a value from ${field.min} to ${field.max}.`, 'error');
+        return;
+      }
+      queueSave(0, 'auto');
+    });
+    label.appendChild(input);
+    groups.get(field.group).appendChild(label);
+    state.controlFields.push({ ...field, input });
+  });
+}
+
+function readControlFields() {
+  return Object.fromEntries(state.controlFields.map(({ key, type, input }) =>
+    [key, type === 'boolean' ? input.checked : type === 'number' ? Number(input.value) : input.value]));
+}
 
 function setMessage(text, kind = '') {
   elements.message.textContent = text || '';
@@ -166,11 +229,13 @@ function serializeForm() {
   params.set('radarSmoothingPasses', String(draft.radarSmoothingPasses || 0));
   params.set('debugMode', draft.debugMode ? 'true' : 'false');
   params.set('updateIntervalMinutes', String(draft.updateIntervalMinutes || 5));
+  state.controlFields.forEach(({ key }) => params.set(key, String(draft[key])));
   return params.toString();
 }
 
 function readDraftSettings() {
   return {
+    ...readControlFields(),
     locationQuery: elements.locationQuery.value.trim(),
     apiKey: elements.apiKey.value,
     units: elements.units.value,
@@ -289,6 +354,15 @@ function renderWifiStatus(status = {}) {
 }
 
 function populateForm(settings) {
+  createControlFields(settings.controlSchema);
+  const pending = Array.from(state.dirtyFields, (key) => {
+    const input = elements.form.elements.namedItem(key);
+    return input ? { input, value: input.value, checked: input.checked } : null;
+  }).filter(Boolean);
+  state.controlFields.forEach(({ key, type, input }) => {
+    if (type === 'boolean') input.checked = settings[key] === true;
+    else input.value = settings[key] ?? '';
+  });
   ensureWifiOption(settings.wifiSsid || '', settings.wifiSsid || 'Saved network');
   if (document.activeElement !== elements.wifiSsid) {
     elements.wifiSsid.value = settings.wifiSsid || '';
@@ -314,6 +388,10 @@ function populateForm(settings) {
   elements.deviceThemePill.textContent = `Device Theme: ${themeLabel(settings.deviceTheme || 'pixel_storm')}`;
   applyPageTheme(settings.theme, settings.deviceTheme || 'pixel_storm');
   state.lastSerialized = serializeForm();
+  pending.forEach(({ input, value, checked }) => {
+    input.value = value;
+    input.checked = checked;
+  });
 }
 
 function renderDebugConsole(debugPayload = null) {
@@ -740,6 +818,11 @@ async function persistSettings(reason = 'manual') {
     state.queuedSave = true;
     return;
   }
+  if (!elements.form.checkValidity()) {
+    setMessage('Check the highlighted settings ranges before saving.', 'error');
+    elements.form.reportValidity();
+    return;
+  }
 
   const serialized = serializeForm();
   if (state.settings && serialized === state.lastSerialized && reason !== 'manual') {
@@ -769,6 +852,11 @@ async function persistSettings(reason = 'manual') {
   }
 
   state.settings = result;
+  const currentDraft = new URLSearchParams(serializeForm());
+  const sentDraft = new URLSearchParams(serialized);
+  state.dirtyFields.forEach((key) => {
+    if (currentDraft.get(key) === sentDraft.get(key)) state.dirtyFields.delete(key);
+  });
   populateForm(result);
   setMessage(result.message || 'Settings saved.', 'success');
   await loadPreview();
@@ -785,6 +873,7 @@ function queueSave(delay = 0, reason = 'auto') {
   }
 
   state.saveTimer = setTimeout(() => {
+    state.saveTimer = null;
     persistSettings(reason).catch((error) => {
       state.saveInFlight = false;
       const msg = (error?.message || '').toLowerCase().includes('failed to fetch')
@@ -801,6 +890,12 @@ function refreshPreviewFromDraft() {
 }
 
 function bindEvents() {
+  const markDirty = (event) => {
+    const key = event.target.name;
+    if (key && !key.startsWith('wifi')) state.dirtyFields.add(key);
+  };
+  elements.form.addEventListener('input', markDirty);
+  elements.form.addEventListener('change', markDirty);
   elements.form.addEventListener('submit', (event) => {
     event.preventDefault();
     queueSave(0, 'manual');
@@ -833,6 +928,17 @@ function bindEvents() {
   elements.remoteSound.addEventListener('click', () => {
     sendRemoteCommand({ action: 'sound' })
       .then(() => setRemoteStatus('SPEAKER TEST SENT', 'live'))
+      .catch((error) => setRemoteStatus(error.message, 'error'));
+  });
+  elements.weatherRefresh.addEventListener('click', () => {
+    sendRemoteCommand({ action: 'refresh' })
+      .then(() => setRemoteStatus('WEATHER REFRESH REQUESTED', 'live'))
+      .catch((error) => setRemoteStatus(error.message, 'error'));
+  });
+  elements.deviceRestart.addEventListener('click', () => {
+    if (!window.confirm('Restart the weather console?')) return;
+    sendRemoteCommand({ action: 'restart', confirm: 'true' })
+      .then(() => setRemoteStatus('RESTART REQUESTED', 'live'))
       .catch((error) => setRemoteStatus(error.message, 'error'));
   });
   elements.remoteScreen.addEventListener('pointerdown', (event) => {

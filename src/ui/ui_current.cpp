@@ -23,7 +23,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 
 void style_chip(lv_obj_t* obj, ThemeManager& theme) {
 	lv_obj_add_style(obj, theme.chipStyle(), LV_PART_MAIN);
-	lv_obj_set_style_bg_opa(obj, LV_OPA_80, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
 }
 
@@ -206,8 +206,8 @@ void CurrentPage::applyTheme(ThemeManager& theme) {
 	const IconId id = ui_icon_from_condition_code(lastConditionCode_, lastIsDaylight_);
 	iconObj_ = ui_icon_create(heroCard_, id, theme.themeId());
 	if (iconObj_ != nullptr) {
-		ui_icon_set_size(iconObj_, 52, 52);
-		lv_obj_align(iconObj_, LV_ALIGN_RIGHT_MID, 0, 12);
+		ui_icon_set_size(iconObj_, 56, 56);
+		lv_obj_align(iconObj_, LV_ALIGN_RIGHT_MID, -2, 12);
 		displayedIconId_ = id;
 		hasDisplayedIcon_ = true;
 	}

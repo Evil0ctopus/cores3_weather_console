@@ -25,7 +25,7 @@ void applyTileSurface(lv_obj_t* object, const ui::ThemeManager& theme) {
 	if (object == nullptr) {
 		return;
 	}
-	lv_obj_set_style_bg_opa(object, theme.themeId() == ui::ThemeId::PIXEL_STORM ? LV_OPA_TRANSP : LV_OPA_30, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(object, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_border_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
 	lv_obj_set_style_outline_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -58,12 +58,21 @@ void styleStatusHud(lv_obj_t* object, const ui::ThemeManager& theme) {
 	if (object == nullptr) {
 		return;
 	}
-	lv_obj_set_style_bg_opa(object, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(object, LV_OPA_90, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(object, theme.palette().surfaceAlt, LV_PART_MAIN);
 	lv_obj_set_style_border_width(object, 1, LV_PART_MAIN);
 	lv_obj_set_style_border_color(object, theme.palette().shadow, LV_PART_MAIN);
 	lv_obj_set_style_border_opa(object, LV_OPA_40, LV_PART_MAIN);
 	lv_obj_set_style_radius(object, 14, LV_PART_MAIN);
+}
+
+void tintNavigationIcon(lv_obj_t* holder, lv_color_t tint) {
+	if (holder == nullptr) return;
+	lv_obj_t* image = lv_obj_get_child(holder, 0);
+	if (image != nullptr && lv_obj_check_type(image, &lv_img_class)) {
+		lv_obj_set_style_img_recolor(image, tint, LV_PART_MAIN);
+		lv_obj_set_style_img_recolor_opa(image, LV_OPA_COVER, LV_PART_MAIN);
+	}
 }
 
 }  // namespace
@@ -242,14 +251,14 @@ void RootNavigator::begin(lv_obj_t* screen, app::SettingsStore& settingsStore) {
 	debugOverlay_ = lv_label_create(screen_);
 	lv_obj_set_width(debugOverlay_, lv_pct(98));
 	lv_obj_set_style_text_font(debugOverlay_, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_set_style_text_color(debugOverlay_, lv_color_black(), LV_PART_MAIN);
+	lv_obj_set_style_text_color(debugOverlay_, theme_.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_bg_opa(debugOverlay_, LV_OPA_60, LV_PART_MAIN);
-	lv_obj_set_style_bg_color(debugOverlay_, lv_color_hex(0x101A2A), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(debugOverlay_, theme_.palette().surface, LV_PART_MAIN);
 	lv_obj_set_style_pad_hor(debugOverlay_, 8, LV_PART_MAIN);
 	lv_obj_set_style_pad_ver(debugOverlay_, 6, LV_PART_MAIN);
 	lv_obj_set_style_radius(debugOverlay_, 10, LV_PART_MAIN);
 	lv_obj_set_style_border_width(debugOverlay_, 1, LV_PART_MAIN);
-	lv_obj_set_style_border_color(debugOverlay_, lv_color_hex(0x5577A8), LV_PART_MAIN);
+	lv_obj_set_style_border_color(debugOverlay_, theme_.palette().shadow, LV_PART_MAIN);
 	lv_obj_align(debugOverlay_, LV_ALIGN_TOP_MID, 0, 2);
 	lv_label_set_long_mode(debugOverlay_, LV_LABEL_LONG_WRAP);
 	lv_label_set_text(debugOverlay_, "");
@@ -353,6 +362,7 @@ void RootNavigator::begin(lv_obj_t* screen, app::SettingsStore& settingsStore) {
 	if (homeButtonIcon != nullptr) {
 		ui_icon_set_size(homeButtonIcon, 22, 22);
 		lv_obj_center(homeButtonIcon);
+		tintNavigationIcon(homeButtonIcon, theme_.palette().accent);
 	}
 	lv_obj_add_event_cb(homeButton_, onHomeSelected, LV_EVENT_CLICKED, this);
 	lv_obj_add_flag(homeButton_, LV_OBJ_FLAG_HIDDEN);
@@ -366,6 +376,7 @@ void RootNavigator::begin(lv_obj_t* screen, app::SettingsStore& settingsStore) {
 
 void RootNavigator::setTheme(ThemeId themeId) {
 	Serial.printf("[THEME] RootNavigator applying theme id=%d name=%s\n", static_cast<int>(themeId), theme_id_to_name(themeId));
+	systemPage_.closeOverlays();
 	theme_.setTheme(themeId);
 	ui_theme_apply_to_root(screen_, themeId);
 	ui_make_transparent(screen_);
@@ -433,13 +444,14 @@ void RootNavigator::setTheme(ThemeId themeId) {
 	if (homeButton_ != nullptr) {
 		lv_obj_set_style_bg_color(homeButton_, theme_.palette().surfaceAlt, LV_PART_MAIN);
 		lv_obj_set_style_border_color(homeButton_, theme_.palette().accent, LV_PART_MAIN);
+		tintNavigationIcon(lv_obj_get_child(homeButton_, 0), theme_.palette().accent);
+	}
+	if (debugOverlay_ != nullptr) {
+		lv_obj_set_style_text_color(debugOverlay_, theme_.palette().textPrimary, LV_PART_MAIN);
+		lv_obj_set_style_bg_color(debugOverlay_, theme_.palette().surface, LV_PART_MAIN);
 	}
 	styleHome();
-	if (!homeVisible_ && themeId != ThemeId::PIXEL_STORM) {
-		lv_obj_add_flag(homeBackdrop_, LV_OBJ_FLAG_HIDDEN);
-	} else {
-		lv_obj_clear_flag(homeBackdrop_, LV_OBJ_FLAG_HIDDEN);
-	}
+	lv_obj_clear_flag(homeBackdrop_, LV_OBJ_FLAG_HIDDEN);
 	invalidateTree(screen_);
 	Serial.println("[UI] Transparency applied");
 }
@@ -448,34 +460,44 @@ void RootNavigator::styleHome() {
 	if (homePanel_ == nullptr) {
 		return;
 	}
-	lv_obj_set_style_bg_color(homePanel_, lv_color_hex(0x050919), LV_PART_MAIN);
-	const bool cinematic = theme_.themeId() == ThemeId::PIXEL_STORM;
-	lv_obj_set_style_bg_opa(homeBackdrop_, cinematic ? LV_OPA_TRANSP : LV_OPA_COVER, LV_PART_MAIN);
-	lv_obj_set_style_text_color(homeTitle_, lv_color_hex(0xF0F7FF), LV_PART_MAIN);
+	const ThemeColors colors = get_theme_colors(theme_.themeId());
+	lv_obj_set_style_bg_color(homePanel_, theme_.palette().bg, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(homeBackdrop_, LV_OPA_TRANSP, LV_PART_MAIN);
+	lv_obj_set_style_text_color(homeTitle_, theme_.palette().textPrimary, LV_PART_MAIN);
 	lv_obj_set_style_text_letter_space(homeTitle_, 1, LV_PART_MAIN);
-	lv_obj_set_style_text_color(homeReadout_, lv_color_hex(0xBCCAE8), LV_PART_MAIN);
+	lv_obj_set_style_text_color(homeReadout_, theme_.palette().textSecondary, LV_PART_MAIN);
+	for (lv_obj_t* spark : stormSparks_) {
+		lv_obj_set_style_bg_color(spark, lv_color_hex(colors.accent_secondary), LV_PART_MAIN);
+		if (theme_.themeId() == ThemeId::PIXEL_STORM || theme_.themeId() == ThemeId::AURORA_LINE) {
+			lv_obj_clear_flag(spark, LV_OBJ_FLAG_HIDDEN);
+		} else {
+			lv_obj_add_flag(spark, LV_OBJ_FLAG_HIDDEN);
+		}
+	}
 	for (uint8_t page = 0; page < 6; ++page) {
 		lv_obj_t* button = hubButtons_[page];
 		if (button == nullptr) {
 			continue;
 		}
-		const lv_color_t accent = lv_color_hex(page % 2 == 0 ? 0x73DFFF : 0xAA91ED);
+		const lv_color_t accent = lv_color_hex(page % 2 == 0 ? colors.accent_primary : colors.accent_secondary);
 		lv_obj_set_style_radius(button, 12, LV_PART_MAIN);
-		lv_obj_set_style_bg_opa(button, LV_OPA_80, LV_PART_MAIN);
-		lv_obj_set_style_bg_color(button, lv_color_hex(0x0B1730), LV_PART_MAIN);
-		lv_obj_set_style_bg_grad_color(button, lv_color_hex(page % 2 == 0 ? 0x152B43 : 0x26233F), LV_PART_MAIN);
+		lv_obj_set_style_bg_opa(button, LV_OPA_90, LV_PART_MAIN);
+		lv_obj_set_style_bg_color(button, theme_.palette().surface, LV_PART_MAIN);
+		lv_obj_set_style_bg_grad_color(button, theme_.palette().surfaceAlt, LV_PART_MAIN);
 		lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_VER, LV_PART_MAIN);
 		lv_obj_set_style_border_color(button, accent, LV_PART_MAIN);
 		lv_obj_set_style_border_width(button, 1, LV_PART_MAIN);
 		lv_obj_set_style_border_opa(button, LV_OPA_40, LV_PART_MAIN);
-		lv_obj_set_style_bg_color(button, lv_color_hex(0x30516B), LV_PART_MAIN | LV_STATE_PRESSED);
+		lv_obj_set_style_bg_color(button, lv_color_mix(accent, theme_.palette().surface, LV_OPA_30), LV_PART_MAIN | LV_STATE_PRESSED);
 		lv_obj_t* label = lv_obj_get_child(button, 0);
-		lv_obj_set_style_text_color(label, lv_color_hex(0xF0F7FF), LV_PART_MAIN);
+		lv_obj_set_style_text_color(label, theme_.palette().textPrimary, LV_PART_MAIN);
+		if (page >= 3) tintNavigationIcon(lv_obj_get_child(button, 1), accent);
 	}
 }
 
 void RootNavigator::animateStorm(lv_timer_t* timer) {
 	RootNavigator* navigator = static_cast<RootNavigator*>(timer->user_data);
+	if (navigator->settingsStore_ != nullptr && !navigator->settingsStore_->settings().controls.displayAnimations) return;
 	if (lv_obj_has_flag(navigator->homeBackdrop_, LV_OBJ_FLAG_HIDDEN)) {
 		return;
 	}
@@ -632,6 +654,7 @@ void RootNavigator::showHome() {
 	if (homePanel_ == nullptr) {
 		return;
 	}
+	systemPage_.closeOverlays();
 	homeVisible_ = true;
 	lv_obj_clear_flag(homeBackdrop_, LV_OBJ_FLAG_HIDDEN);
 	if (homeAnimation_ != nullptr) {
@@ -645,37 +668,32 @@ void RootNavigator::showHome() {
 	lv_obj_move_foreground(statusHud_);
 }
 
-void RootNavigator::openPage(uint8_t page, bool animated) {
+void RootNavigator::openPage(uint8_t page, bool /*animated*/) {
 	if (tileview_ == nullptr || page >= 6) {
 		return;
 	}
+	systemPage_.closeOverlays();
 	currentPageIndex_ = page;
-	const bool fromHome = homeVisible_;
 	homeVisible_ = false;
-	if (theme_.themeId() != ThemeId::PIXEL_STORM) {
-		lv_obj_add_flag(homeBackdrop_, LV_OBJ_FLAG_HIDDEN);
-	}
 	lv_obj_add_flag(homePanel_, LV_OBJ_FLAG_HIDDEN);
 	lv_obj_clear_flag(tileview_, LV_OBJ_FLAG_HIDDEN);
 	lv_obj_clear_flag(homeButton_, LV_OBJ_FLAG_HIDDEN);
-	const bool slide = animated && !fromHome && theme_.themeId() != ThemeId::PIXEL_STORM;
-	lv_obj_set_tile_id(tileview_, currentPageIndex_, 0, slide ? LV_ANIM_ON : LV_ANIM_OFF);
+	lv_obj_set_tile_id(tileview_, currentPageIndex_, 0, LV_ANIM_OFF);
 	lv_obj_update_layout(tileview_);
-	snapTileviewToTile(tileview_, tileForPage(currentPageIndex_), slide);
+	snapTileviewToTile(tileview_, tileForPage(currentPageIndex_), false);
 	lv_obj_update_layout(tileview_);
 	lv_obj_move_foreground(homeButton_);
 }
 
-void RootNavigator::recenterActivePage(bool animated) {
+void RootNavigator::recenterActivePage(bool /*animated*/) {
 	if (tileview_ == nullptr) {
 		return;
 	}
 	const uint8_t page = currentPageIndex_;
-	const bool slide = animated && theme_.themeId() != ThemeId::PIXEL_STORM;
-	lv_obj_set_tile_id(tileview_, page, 0, slide ? LV_ANIM_ON : LV_ANIM_OFF);
+	lv_obj_set_tile_id(tileview_, page, 0, LV_ANIM_OFF);
 	lv_obj_update_layout(tileview_);
 	lv_obj_t* activeTile = tileForPage(page);
-	snapTileviewToTile(tileview_, activeTile, slide);
+	snapTileviewToTile(tileview_, activeTile, false);
 	lv_obj_update_layout(tileview_);
 	invalidateTree(screen_);
 }

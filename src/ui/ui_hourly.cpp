@@ -122,7 +122,7 @@ void HourlyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		lv_obj_set_style_pad_right(cards_[i], 10, LV_PART_MAIN);
 		lv_obj_set_style_pad_top(cards_[i], 8, LV_PART_MAIN);
 		lv_obj_set_style_pad_bottom(cards_[i], 8, LV_PART_MAIN);
-		lv_obj_set_style_pad_column(cards_[i], 10, LV_PART_MAIN);
+		lv_obj_set_style_pad_column(cards_[i], 6, LV_PART_MAIN);
 		lv_obj_set_flex_flow(cards_[i], LV_FLEX_FLOW_ROW);
 		lv_obj_set_flex_align(cards_[i], LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 		lv_obj_clear_flag(cards_[i], LV_OBJ_FLAG_SCROLLABLE);
@@ -150,7 +150,7 @@ void HourlyPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 		lv_obj_add_style(detailLabels_[i], theme.captionStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_align(detailLabels_[i], LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
 		lv_label_set_long_mode(detailLabels_[i], LV_LABEL_LONG_WRAP);
-		lv_obj_set_width(detailLabels_[i], 88);
+		lv_obj_set_width(detailLabels_[i], 86);
 		lv_label_set_text(detailLabels_[i], "Rain --%\nWind --");
 	}
 }
@@ -176,10 +176,12 @@ void HourlyPage::applyTheme(ThemeManager& theme) {
 			ui_icon_delete(iconObjs_[i]);
 			iconObjs_[i] = nullptr;
 		}
-		iconObjs_[i] = ui_icon_create(cards_[i], IconId::ICON_CLEAR_DAY, theme.themeId());
+		const IconId id = iconSet_[i] ? iconIds_[i] : IconId::ICON_CLEAR_DAY;
+		iconObjs_[i] = ui_icon_create(cards_[i], id, theme.themeId());
 		if (iconObjs_[i] != nullptr) {
 			ui_icon_set_size(iconObjs_[i], 34, 34);
-			iconIds_[i] = IconId::ICON_CLEAR_DAY;
+			lv_obj_move_to_index(iconObjs_[i], 1);
+			iconIds_[i] = id;
 			iconSet_[i] = true;
 		}
 	}
@@ -212,6 +214,7 @@ void HourlyPage::update(const WeatherData& data, bool imperial) {
 			iconObjs_[i] = ui_icon_create(cards_[i], iconId, theme_->themeId());
 			if (iconObjs_[i] != nullptr) {
 				ui_icon_set_size(iconObjs_[i], 34, 34);
+				lv_obj_move_to_index(iconObjs_[i], 1);
 				iconIds_[i] = iconId;
 				iconSet_[i] = true;
 			}

@@ -330,9 +330,46 @@ void LedEngine::update() {
 
 void LedEngine::updateWeatherMood(const WeatherData& data) {
 	mood_ = chooseMoodPalette(data);
+	weatherFresh_ = data.current.valid && data.currentFetchedAtMs != 0 &&
+		millis() - data.currentFetchedAtMs < 2UL * 60UL * 60UL * 1000UL;
+	const String summary = data.current.summary;
+	const int icon = data.current.icon;
+	weatherEffect_ = (SummaryContains(summary, "thunder") || SummaryContains(summary, "t-storm") ||
+		icon == 15 || icon == 16 || icon == 17) ? 1 :
+		(SummaryContains(summary, "snow") || icon == 19 || icon == 20 || icon == 21 ||
+		 icon == 22 || icon == 23 || icon == 24 || icon == 25 || icon == 29) ? 3 :
+		(SummaryContains(summary, "rain") || SummaryContains(summary, "shower") || icon == 12 ||
+		 icon == 13 || icon == 14 || icon == 18 || icon == 26 || icon == 39 || icon == 40) ? 2 : 0;
+}
+
+void LedEngine::configure(const app::ControlSettings& settings, bool quiet) {
+	controls_ = settings;
+	quiet_ = quiet;
+	const uint32_t percent = quiet ? settings.ledBrightness / 4U : settings.ledBrightness;
+	const uint8_t brightness = static_cast<uint8_t>(percent * 255U / 100U);
+	if (brightness_ != brightness) {
+		brightness_ = brightness;
+		forceNextPush_ = true;
+	}
+}
+
+void LedEngine::writeStatus(JsonDocument& doc) const {
+	doc["ledMode"] = controls_.ledMode;
+	doc["ledBrightness"] = brightness_;
+	doc["ledQuiet"] = quiet_;
+	doc["ledReady"] = isReady();
+	doc["weatherFresh"] = weatherFresh_;
+	JsonArray pixels = doc["ledPixels"].to<JsonArray>();
+	for (size_t i = 0; i < ledCount_ && i < kMaxLeds; ++i) {
+		JsonArray pixel = pixels.add<JsonArray>();
+		pixel.add(lastPushed_[i].r);
+		pixel.add(lastPushed_[i].g);
+		pixel.add(lastPushed_[i].b);
+	}
 }
 
 void LedEngine::pageTransition(uint8_t fromPage, uint8_t toPage) {
+	if (!controls_.ledNavigation || controls_.ledMode == "off" || quiet_) return;
 	transition_.active = true;
 	transition_.forward = toPage >= fromPage;
 	transition_.fromPage = fromPage;
@@ -343,6 +380,7 @@ void LedEngine::pageTransition(uint8_t fromPage, uint8_t toPage) {
 }
 
 void LedEngine::touchEvent(TouchKind kind, int16_t deltaX, int16_t deltaY) {
+	if (!controls_.ledTouch || controls_.ledMode == "off" || quiet_) return;
 	touch_.active = true;
 	touch_.kind = kind;
 	touch_.deltaX = deltaX;
@@ -429,47 +467,12 @@ void LedEngine::setEventCallback(LedEventCallback callback, void* userContext) {
 }
 
 String LedEngine::statusLabel() const {
-	String suffix = usingExternalStrips_ ? " / Bottom3 GPIO5" : " / LED Offline";
-	if (boot_.active) {
-		return "Boot" + suffix;
-	}
-	if (alert_.active && alert_.level == AlertLevel::Critical) {
-		return "Critical Alert" + suffix;
-	}
-	if (alert_.active) {
-		return "Alert" + suffix;
-	}
-	if (progress_.active) {
-		return "Progress" + suffix;
-	}
-	if (transition_.active) {
-		return "Page Sweep" + suffix;
-	}
-	if (touch_.active) {
-		return "Touch Response" + suffix;
-	}
-	if (!idle_.active) {
-		return "Off" + suffix;
-	}
-
-	const IdleMode mode = resolveIdleMode(millis());
-	switch (mode) {
-		case IdleMode::CyanBreathing:
-			return "Cyan Breathing" + suffix;
-		case IdleMode::Breathing:
-			return "Breathing" + suffix;
-		case IdleMode::Sunrise:
-			return "Sunrise" + suffix;
-		case IdleMode::Sunset:
-			return "Sunset" + suffix;
-		case IdleMode::WeatherGlow:
-			return "Weather Glow" + suffix;
-		case IdleMode::Off:
-			return "Off" + suffix;
-		case IdleMode::Auto:
-		default:
-			return "Auto" + suffix;
-	}
+	if (controls_.ledMode == "off") return controls_.ledAlerts && alert_.active ? "Alert override" : "Off";
+	if (controls_.ledMode == "rainbow") return "Flowing Rainbow";
+	if (controls_.ledMode == "solid") return "Solid " + controls_.ledColor;
+	if (controls_.ledMode == "breathing") return "Breathing " + controls_.ledColor;
+	if (!weatherFresh_) return "Weather unavailable / stale";
+	return quiet_ ? "Active Weather (quiet)" : "Active Weather";
 }
 
 bool LedEngine::isReady() const {
@@ -481,6 +484,7 @@ size_t LedEngine::ledCount() const {
 }
 
 void LedEngine::renderFrame(uint32_t nowMs) {
+	clearFrame();
 	LayerEntry stack[8];
 	const uint8_t count = buildLayerStack(nowMs, stack, static_cast<uint8_t>(sizeof(stack) / sizeof(stack[0])));
 	if (count == 0) {
@@ -510,24 +514,22 @@ uint8_t LedEngine::buildLayerStack(uint32_t nowMs, LayerEntry* outStack, uint8_t
 		outStack[count++] = LayerEntry{id, priority};
 	};
 
-	pushLayer(LayerId::WeatherBase, 10);
-	if (idle_.active) {
-		pushLayer(LayerId::Idle, 20);
-	}
-	if (progress_.active) {
+	const bool enabled = controls_.ledMode != "off";
+	if (enabled) pushLayer(LayerId::WeatherBase, 10);
+	if (enabled && !quiet_ && controls_.ledMode == "weather" && progress_.active) {
 		pushLayer(LayerId::Progress, 30);
 	}
-	if (transition_.active) {
+	if (enabled && !quiet_ && controls_.ledNavigation && transition_.active) {
 		pushLayer(LayerId::Transition, 40);
 	}
-	if (touch_.active) {
+	if (enabled && !quiet_ && controls_.ledTouch && touch_.active) {
 		pushLayer(LayerId::Touch, 50);
 	}
-	pushLayer(LayerId::System, 60);
-	if (boot_.active) {
+	if (enabled && !quiet_ && controls_.ledMode == "weather" && weatherFresh_) pushLayer(LayerId::System, 60);
+	if (enabled && boot_.active) {
 		pushLayer(LayerId::Boot, 65);
 	}
-	if (alert_.active) {
+	if (controls_.ledAlerts && (!quiet_ || controls_.quietAlertOverride) && alert_.active) {
 		if (alert_.level == AlertLevel::Critical) {
 			pushLayer(LayerId::CriticalAlert, 255);
 		} else {
@@ -684,7 +686,7 @@ LedEngine::MoodPalette LedEngine::chooseMoodPalette(const WeatherData& data) con
 	const String summary = data.current.summary;
 	const int icon = data.current.icon;
 
-	if (SummaryContains(summary, "thunder") || icon == 15 || icon == 16 || icon == 17) {
+	if (SummaryContains(summary, "thunder") || SummaryContains(summary, "t-storm") || icon == 15 || icon == 16 || icon == 17) {
 		palette.primary = patterns::color(52, 20, 88);
 		palette.secondary = patterns::color(9, 6, 24);
 		palette.accent = patterns::color(255, 208, 72);
@@ -763,6 +765,47 @@ RGBColor LedEngine::pageColor(uint8_t page) const {
 }
 
 void LedEngine::renderWeatherBase(uint32_t nowMs) {
+	const uint32_t period = 12000U - controls_.ledSpeed * 90U;
+	const float phase = static_cast<float>(nowMs % period) / period;
+	if (controls_.ledMode == "rainbow") {
+		for (size_t i = 0; i < ledCount_; ++i) {
+			const float hue = phase + static_cast<float>(i) / (ledCount_ == 0 ? 1 : ledCount_);
+			constexpr float kTau = 6.2831853f;
+			frame_[i] = patterns::color(
+				static_cast<uint8_t>(127.5f + 127.5f * sinf(kTau * hue)),
+				static_cast<uint8_t>(127.5f + 127.5f * sinf(kTau * (hue + 0.333333f))),
+				static_cast<uint8_t>(127.5f + 127.5f * sinf(kTau * (hue + 0.666667f))));
+		}
+		return;
+	}
+	if (controls_.ledMode == "solid" || controls_.ledMode == "breathing") {
+		RGBColor color = patterns::color(0, 200, 255);
+		if (controls_.ledColor == "red") color = patterns::color(255, 0, 0);
+		else if (controls_.ledColor == "orange") color = patterns::color(255, 100, 0);
+		else if (controls_.ledColor == "yellow") color = patterns::color(255, 220, 0);
+		else if (controls_.ledColor == "green") color = patterns::color(0, 255, 50);
+		else if (controls_.ledColor == "blue") color = patterns::color(0, 60, 255);
+		else if (controls_.ledColor == "purple") color = patterns::color(160, 30, 255);
+		else if (controls_.ledColor == "white") color = patterns::color(255, 255, 255);
+		clearFrame(controls_.ledMode == "breathing" ? patterns::scale(color, 0.15f + 0.85f * patterns::triangleWave(phase)) : color);
+		return;
+	}
+	if (!weatherFresh_) {
+		clearFrame(patterns::color(10, 14, 18));
+		return;
+	}
+	if (weatherEffect_ == 1 && controls_.ledLightning && !quiet_) {
+		const uint32_t lightningPhase = nowMs % 11000U;
+		const float pulse = lightningPhase < 500U ? sinf(lightningPhase * 3.14159265f / 500.0f) * 0.5f : 0.0f;
+		clearFrame(patterns::blend(mood_.primary, patterns::color(200, 220, 255), pulse));
+		return;
+	}
+	if (weatherEffect_ == 2 || weatherEffect_ == 3) {
+		clearFrame(mood_.secondary);
+		patterns::addSweep(frame_, ledCount_, phase * (ledCount_ + 2) - 1, 0.8f,
+			weatherEffect_ == 3 ? patterns::color(220, 240, 255) : patterns::color(40, 160, 255), 0.7f);
+		return;
+	}
 	const float drift = patterns::triangleWave((static_cast<float>(nowMs % 6000U) / 6000.0f) + 0.12f);
 	patterns::fillGradient(frame_, ledCount_, mood_.secondary, mood_.primary, drift * 0.25f);
 

@@ -4,6 +4,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include <string.h>
+#include <math.h>
 
 namespace ui {
 namespace {
@@ -13,7 +14,6 @@ ThemePalette gPalette = {};
 ThemeTypography gTypography = {};
 ThemeSpacing gSpacing = {};
 ThemeAccentRules gAccentRules = {};
-bool gCinematic = false;
 
 bool gStylesInitialized = false;
 lv_style_t gScreenStyle;
@@ -58,15 +58,22 @@ bool useLightText(uint32_t color) {
 	return luma < 140000U;
 }
 
+lv_color_t chipTextColor(uint32_t color) {
+	float luminance = 0;
+	const float weights[] = {0.2126f, 0.7152f, 0.0722f};
+	for (unsigned channel = 0; channel < 3; ++channel) {
+		const float value = ((color >> (16U - channel * 8U)) & 0xFFU) / 255.0f;
+		luminance += weights[channel] * (value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f));
+	}
+	return luminance > 0.179f ? lv_color_black() : lv_color_white();
+}
+
 void rebuildThemeState(ThemeId id) {
 	gThemeColors = get_theme_colors(id);
-	gCinematic = id == ThemeId::PIXEL_STORM;
 	gTypography = ThemeTypography();
 	gSpacing = ThemeSpacing();
-	if (gCinematic) {
-		gSpacing.cardRadius = 12;
-		gSpacing.cardAltRadius = 12;
-	}
+	gSpacing.cardRadius = 12;
+	gSpacing.cardAltRadius = 12;
 
 	gPalette.bg = hexColor(gThemeColors.bg_main);
 	gPalette.surface = hexColor(gThemeColors.bg_card);
@@ -77,7 +84,7 @@ void rebuildThemeState(ThemeId id) {
 	gPalette.shadow = hexColor(gThemeColors.border_soft);
 	gPalette.warning = hexColor(gThemeColors.accent_warning);
 
-	gAccentRules.chipText = useLightText(gThemeColors.accent_primary) ? lv_color_white() : lv_color_black();
+	gAccentRules.chipText = chipTextColor(gThemeColors.accent_primary);
 	gAccentRules.iconTint = hexColor(gThemeColors.accent_secondary);
 	gAccentRules.iconMutedTint = hexColor(gThemeColors.text_secondary);
 }
@@ -99,11 +106,11 @@ void rebuildStyles() {
 
 	lv_style_reset(&gCardStyle);
 	lv_style_set_radius(&gCardStyle, gSpacing.cardRadius);
-	lv_style_set_bg_opa(&gCardStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
+	lv_style_set_bg_opa(&gCardStyle, useLightText(gThemeColors.bg_main) ? LV_OPA_40 : LV_OPA_80);
 	lv_style_set_bg_color(&gCardStyle, hexColor(gThemeColors.bg_card));
 	lv_style_set_border_width(&gCardStyle, 1);
 	lv_style_set_border_color(&gCardStyle, hexColor(gThemeColors.border_soft));
-	lv_style_set_border_opa(&gCardStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
+	lv_style_set_border_opa(&gCardStyle, LV_OPA_40);
 	lv_style_set_pad_all(&gCardStyle, gSpacing.cardPadding);
 	lv_style_set_shadow_opa(&gCardStyle, LV_OPA_TRANSP);
 	lv_style_set_shadow_width(&gCardStyle, 0);
@@ -111,15 +118,13 @@ void rebuildStyles() {
 
 	lv_style_reset(&gCardAltStyle);
 	lv_style_set_radius(&gCardAltStyle, gSpacing.cardAltRadius);
-	lv_style_set_bg_opa(&gCardAltStyle, gCinematic ? LV_OPA_80 : LV_OPA_COVER);
+	lv_style_set_bg_opa(&gCardAltStyle, LV_OPA_90);
 	lv_style_set_bg_color(&gCardAltStyle, mixColor(gThemeColors.bg_card, gThemeColors.bg_tab, LV_OPA_60));
-	if (gCinematic) {
-		lv_style_set_bg_grad_color(&gCardAltStyle, hexColor(gThemeColors.bg_tab));
-		lv_style_set_bg_grad_dir(&gCardAltStyle, LV_GRAD_DIR_VER);
-	}
+	lv_style_set_bg_grad_color(&gCardAltStyle, hexColor(gThemeColors.bg_tab));
+	lv_style_set_bg_grad_dir(&gCardAltStyle, LV_GRAD_DIR_VER);
 	lv_style_set_border_width(&gCardAltStyle, 1);
 	lv_style_set_border_color(&gCardAltStyle, hexColor(gThemeColors.border_soft));
-	lv_style_set_border_opa(&gCardAltStyle, gCinematic ? LV_OPA_40 : LV_OPA_COVER);
+	lv_style_set_border_opa(&gCardAltStyle, LV_OPA_40);
 	lv_style_set_pad_all(&gCardAltStyle, gSpacing.cardAltPadding);
 	lv_style_set_shadow_opa(&gCardAltStyle, LV_OPA_TRANSP);
 	lv_style_set_shadow_width(&gCardAltStyle, 0);
@@ -164,13 +169,13 @@ ThemeColors get_theme_colors(ThemeId id) {
 		case ThemeId::PIXEL_STORM:
 			return ThemeColors{0x040816, 0x0b1730, 0x171b38, 0x73dfff, 0xaa91ed, 0xffba62, 0xf0f7ff, 0xbccae8, 0x44648b};
 		case ThemeId::DESERT_CALM:
-			return ThemeColors{0xf7f1e8, 0xf0e3d2, 0xf7f1e8, 0xd47b4a, 0xb89b6d, 0xc0392b, 0x2f2418, 0x7a6a55, 0xe0d2c0};
+			return ThemeColors{0xf7f1e8, 0xf0e3d2, 0xf7f1e8, 0x9c5b37, 0x77613f, 0xc0392b, 0x2f2418, 0x6b5644, 0xe0d2c0};
 		case ThemeId::FUTURE_PULSE:
 			return ThemeColors{0x02010a, 0x07071a, 0x02010a, 0xff2fbf, 0x00f0ff, 0xffb347, 0xf8f9ff, 0x9a9ccf, 0x191933};
 		case ThemeId::MIDNIGHT_RADAR:
 			return ThemeColors{0x06111b, 0x0d1c28, 0x08131e, 0x53e6ff, 0x7dff9b, 0xff7b54, 0xeef8ff, 0x93acbf, 0x1a3445};
 		case ThemeId::DAYBREAK_CLEAR:
-			return ThemeColors{0xbfdfff, 0xe8f3ff, 0xd7e9fb, 0xff9f45, 0x4aa8ff, 0xd94c4c, 0x173044, 0x4d6b82, 0xb4cde3};
+			return ThemeColors{0xbfdfff, 0xe8f3ff, 0xd7e9fb, 0x9f581c, 0x256da8, 0xd94c4c, 0x173044, 0x3e5c73, 0xb4cde3};
 		case ThemeId::STORMGLASS:
 			return ThemeColors{0x0a1720, 0x122532, 0x0d1d27, 0x79c7ff, 0xb2f7ef, 0xff8a5b, 0xf2fbff, 0x92aebc, 0x24404d};
 		case ThemeId::AURORA_LINE:
@@ -347,8 +352,8 @@ void ui_style_card(lv_obj_t* obj, const ThemeManager& theme) {
 	// Get theme colors
 	const ThemeColors colors = get_theme_colors(theme.themeId());
 	
-	// Semi-transparent background overlay (40% opacity)
-	lv_obj_set_style_bg_opa(obj, LV_OPA_40, LV_PART_MAIN);
+	// Light palettes need a denser surface over artwork to retain text contrast.
+	lv_obj_set_style_bg_opa(obj, useLightText(colors.bg_main) ? LV_OPA_40 : LV_OPA_80, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(obj, lv_color_hex(colors.bg_card), LV_PART_MAIN);
 	
 	// Rounded corners
@@ -375,6 +380,11 @@ void ThemeManager::begin(ThemeId id) {
 void ThemeManager::setTheme(ThemeId id) {
 	themeId_ = id;
 	ui_apply_theme_lvgl(id);
+	lv_disp_t* display = lv_disp_get_default();
+	if (display != nullptr) {
+		lv_disp_set_theme(display, lv_theme_default_init(display, gPalette.accent,
+			gAccentRules.iconTint, useLightText(gThemeColors.bg_main), &lv_font_montserrat_14));
+	}
 	Serial.printf("[THEME] Theme set id=%d name=%s\n", static_cast<int>(id), theme_id_to_name(id));
 }
 

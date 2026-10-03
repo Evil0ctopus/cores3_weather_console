@@ -13,6 +13,7 @@ struct WeatherApiConfig {
 	String apiKey;
 	String locationQuery;
 	String locationKey;
+	String locationName;
 	String baseUrl = "http://dataservice.accuweather.com";
 	String language = "en-us";
 	bool useMetric = true;
@@ -33,6 +34,7 @@ class WeatherApi {
 
 	bool begin(const WeatherApiConfig& config);
 	void requestRefresh();
+	void setUpdateInterval(uint32_t minutes);
 	void update();
 
 	const WeatherData& data() const;

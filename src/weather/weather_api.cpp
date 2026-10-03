@@ -288,14 +288,14 @@ bool WeatherApi::processGeocodeResponse(const String& payload, bool openMeteo) {
 		config_.locationKey = String(resolvedLatitude_, 4) + "," + String(resolvedLongitude_, 4);
 		data_.locationKey = config_.locationKey;
 	}
-	if (data_.locationName.length() == 0) {
+	if (config_.locationName.length() == 0) {
 		data_.locationName = String(static_cast<const char*>(first["name"] | ""));
 		const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
 		if (admin1.length() > 0) {
 			data_.locationName += ", " + admin1;
 		}
 		if (data_.locationName.length() == 0) {
-			data_.locationName = config_.locationQuery;
+			data_.locationName = config_.locationName.length() ? config_.locationName : config_.locationQuery;
 		}
 	}
 	return updateRadarTileProjection();
@@ -331,6 +331,11 @@ bool WeatherApi::begin(const WeatherApiConfig& config) {
 
 void WeatherApi::requestRefresh() {
 	forceRefresh_ = true;
+}
+
+void WeatherApi::setUpdateInterval(uint32_t minutes) {
+	config_.currentCacheMs = minutes * 60000UL;
+	config_.alertsCacheMs = config_.currentCacheMs;
 }
 
 void WeatherApi::update() {

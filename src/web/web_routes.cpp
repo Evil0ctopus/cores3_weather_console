@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../system/device_remote.h"
+#include "../system/location_lookup.h"
 
 namespace web {
 namespace {
@@ -117,6 +118,8 @@ bool resolveLocation(const String& apiKey,
 			outError = "Failed to connect to the location service.";
 			return false;
 		}
+		http.setConnectTimeout(1500);
+		http.setTimeout(2500);
 
 		const int status = http.GET();
 		if (status != HTTP_CODE_OK) {
@@ -143,6 +146,8 @@ bool resolveLocation(const String& apiKey,
 		JsonObject first = results[0].as<JsonObject>();
 		outLocationKey = String(static_cast<const char*>(first["Key"] | ""));
 		outLocationName = String(static_cast<const char*>(first["LocalizedName"] | ""));
+		const String region = String(static_cast<const char*>(first["AdministrativeArea"]["LocalizedName"] | ""));
+		if (region.length() > 0) outLocationName += ", " + region;
 		if (outLocationKey.length() == 0) {
 			outError = "Location lookup did not return a usable key.";
 			return false;
@@ -151,15 +156,50 @@ bool resolveLocation(const String& apiKey,
 	};
 
 	auto resolveWithOpenMeteo = [&]() {
+		String query = locationQuery;
+		query.trim();
+		String region;
+		const int comma = query.indexOf(',');
+		if (comma >= 0) {
+			region = query.substring(comma + 1);
+			query = query.substring(0, comma);
+			const int nextComma = region.indexOf(',');
+			if (nextComma >= 0) region = region.substring(0, nextComma);
+			query.trim();
+			region.trim();
+			static const char* const states[][2] = {
+				{"AL", "Alabama"}, {"AK", "Alaska"}, {"AZ", "Arizona"}, {"AR", "Arkansas"},
+				{"CA", "California"}, {"CO", "Colorado"}, {"CT", "Connecticut"}, {"DE", "Delaware"},
+				{"FL", "Florida"}, {"GA", "Georgia"}, {"HI", "Hawaii"}, {"ID", "Idaho"},
+				{"IL", "Illinois"}, {"IN", "Indiana"}, {"IA", "Iowa"}, {"KS", "Kansas"},
+				{"KY", "Kentucky"}, {"LA", "Louisiana"}, {"ME", "Maine"}, {"MD", "Maryland"},
+				{"MA", "Massachusetts"}, {"MI", "Michigan"}, {"MN", "Minnesota"}, {"MS", "Mississippi"},
+				{"MO", "Missouri"}, {"MT", "Montana"}, {"NE", "Nebraska"}, {"NV", "Nevada"},
+				{"NH", "New Hampshire"}, {"NJ", "New Jersey"}, {"NM", "New Mexico"}, {"NY", "New York"},
+				{"NC", "North Carolina"}, {"ND", "North Dakota"}, {"OH", "Ohio"}, {"OK", "Oklahoma"},
+				{"OR", "Oregon"}, {"PA", "Pennsylvania"}, {"RI", "Rhode Island"}, {"SC", "South Carolina"},
+				{"SD", "South Dakota"}, {"TN", "Tennessee"}, {"TX", "Texas"}, {"UT", "Utah"},
+				{"VT", "Vermont"}, {"VA", "Virginia"}, {"WA", "Washington"}, {"WV", "West Virginia"},
+				{"WI", "Wisconsin"}, {"WY", "Wyoming"}, {"DC", "District of Columbia"},
+			};
+			for (const auto& state : states) {
+				if (region.equalsIgnoreCase(state[0])) { region = state[1]; break; }
+			}
+		}
 		HTTPClient http;
 		WiFiClientSecure client;
 		client.setInsecure();
+		client.setHandshakeTimeout(3);
 		const String endpoint = String(kOpenMeteoGeocodeUrl) +
-			"?name=" + urlEncode(locationQuery) + "&count=1&language=en&format=json";
+			"?name=" + urlEncode(query) + "&count=" + (region.length() ? "10" : "1") +
+			"&language=en&format=json" +
+			(query.length() == 5 && queryLooksPostal(query) ? "&countryCode=US" : "");
 		if (!http.begin(client, endpoint)) {
 			outError = "Failed to connect to the location service.";
 			return false;
 		}
+		http.setConnectTimeout(1500);
+		http.setTimeout(2500);
 
 		const int status = http.GET();
 		if (status != HTTP_CODE_OK) {
@@ -184,6 +224,22 @@ bool resolveLocation(const String& apiKey,
 		}
 
 		JsonObject first = results[0].as<JsonObject>();
+		if (region.length() > 0) {
+			JsonObject matched;
+			for (JsonObject candidate : results) {
+				const String admin = String(static_cast<const char*>(candidate["admin1"] | ""));
+				const String country = String(static_cast<const char*>(candidate["country"] | ""));
+				if (admin.equalsIgnoreCase(region) || country.equalsIgnoreCase(region)) {
+					matched = candidate;
+					break;
+				}
+			}
+			if (matched.isNull()) {
+				outError = "No matching city in that state/region. Try a ZIP or a more specific city.";
+				return false;
+			}
+			first = matched;
+		}
 		const float latitude = first["latitude"] | NAN;
 		const float longitude = first["longitude"] | NAN;
 		if (isnan(latitude) || isnan(longitude)) {
@@ -191,6 +247,10 @@ bool resolveLocation(const String& apiKey,
 			return false;
 		}
 
+		if (fabsf(latitude) > 90 || fabsf(longitude) > 180) {
+			outError = "Location service returned invalid coordinates.";
+			return false;
+		}
 		outLocationKey = String(latitude, 4) + "," + String(longitude, 4);
 		outLocationName = String(static_cast<const char*>(first["name"] | ""));
 		const String admin1 = String(static_cast<const char*>(first["admin1"] | ""));
@@ -269,22 +329,48 @@ app::AppSettings buildSettingsFromRequest(AsyncWebServerRequest* request,
 		? request->getParam("debugMode", true)->value() == "true"
 		: current.debugMode;
 	source["updateIntervalMinutes"] = request->hasParam("updateIntervalMinutes", true) ? request->getParam("updateIntervalMinutes", true)->value() : String(current.updateIntervalMinutes);
+	for (size_t i = 0; i < app::kBoolControlCount; ++i) {
+		const char* key = app::kBoolControls[i].key;
+		if (!request->hasParam(key, true)) continue;
+		const String value = request->getParam(key, true)->value();
+		if (value != "true" && value != "false") {
+			outError = String(key) + " must be true or false.";
+			return current;
+		}
+		source[key] = value == "true";
+	}
+	for (size_t i = 0; i < app::kNumberControlCount; ++i) {
+		const char* key = app::kNumberControls[i].key;
+		if (!request->hasParam(key, true)) continue;
+		const String text = request->getParam(key, true)->value();
+		char* end = nullptr;
+		const long value = strtol(text.c_str(), &end, 10);
+		if (text.length() == 0 || end == text.c_str() || *end != '\0' || value < 0 ||
+				value > static_cast<long>(app::kNumberControls[i].max)) {
+			outError = String(key) + " must be an integer in range.";
+			return current;
+		}
+		source[key] = static_cast<uint32_t>(value);
+	}
+	for (size_t i = 0; i < app::kChoiceControlCount; ++i) {
+		const char* key = app::kChoiceControls[i].key;
+		if (request->hasParam(key, true)) source[key] = request->getParam(key, true)->value();
+	}
 
 	app::AppSettings next = current;
 	if (!app::readSettingsJson(source.as<JsonVariantConst>(), next, outError, &current)) {
 		return current;
 	}
+	if (!app::validateSettings(next, outError, false)) return current;
 
 	if (!app::validateSettings(next, outError, false)) {
 		return current;
 	}
 
-	const bool locationChanged = next.locationQuery != current.locationQuery || next.apiKey != current.apiKey || current.locationKey.length() == 0;
+	const bool locationChanged = next.locationQuery.length() > 0 &&
+		(next.locationQuery != current.locationQuery || next.apiKey != current.apiKey || current.locationKey.length() == 0);
 	if (locationChanged) {
-		if (next.apiKey.length() == 0) {
-			next.locationKey = "";
-			next.locationName = next.locationQuery;
-		} else {
+		{
 			String resolvedKey;
 			String resolvedName;
 			if (!resolveLocation(next.apiKey, next.locationQuery, resolvedKey, resolvedName, outError)) {
@@ -294,7 +380,7 @@ app::AppSettings buildSettingsFromRequest(AsyncWebServerRequest* request,
 			next.locationName = resolvedName.length() > 0 ? resolvedName : next.locationQuery;
 		}
 	}
-	if (!app::validateSettings(next, outError, true)) {
+	if (!app::validateSettings(next, outError, next.locationQuery.length() > 0)) {
 		return current;
 	}
 	return next;
@@ -392,6 +478,11 @@ void registerRoutes(AsyncWebServer& server,
 			command.pressed = state == "down";
 		} else if (action == "sound") {
 			command.type = app::DeviceRemoteCommandType::Sound;
+		} else if (action == "refresh") {
+			command.type = app::DeviceRemoteCommandType::Refresh;
+		} else if (action == "restart" && request->hasParam("confirm", true) &&
+				request->getParam("confirm", true)->value() == "true") {
+			command.type = app::DeviceRemoteCommandType::Restart;
 		} else {
 			sendError(request, "Unknown control action.", 400);
 			return;
@@ -512,6 +603,7 @@ void registerRoutes(AsyncWebServer& server,
 
 	auto saveSettingsHandler = [&settingsStore, themeProvider, themeProviderContext, settingsSavedCallback, settingsSavedContext](AsyncWebServerRequest* request) {
 		String error;
+		const uint32_t expectedRevision = settingsStore.revision();
 		const app::AppSettings current = settingsStore.settings();
 		const app::AppSettings next = buildSettingsFromRequest(request, current, error);
 		if (error.length() > 0) {
@@ -519,8 +611,10 @@ void registerRoutes(AsyncWebServer& server,
 			return;
 		}
 
-		if (!settingsStore.save(next)) {
-			sendError(request, "Failed to save settings to NVS.", 500);
+		if (!settingsStore.save(next, expectedRevision)) {
+			if (settingsStore.revision() != expectedRevision) {
+				sendError(request, "Settings changed on the device while saving. Review and retry.", 409);
+			} else sendError(request, "Failed to save settings to NVS.", 500);
 			return;
 		}
 
@@ -541,3 +635,8 @@ void registerRoutes(AsyncWebServer& server,
 }
 
 }  // namespace web
+
+bool app::resolveWeatherLocation(const String& apiKey, const String& query,
+		String& key, String& name, String& error) {
+	return web::resolveLocation(apiKey, query, key, name, error);
+}

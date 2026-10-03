@@ -1,3 +1,3 @@
 #pragma once
 
-#define APP_GIT_VERSION "main-fc52eb3-dirty"
+#define APP_GIT_VERSION "main-1b59707-dirty"

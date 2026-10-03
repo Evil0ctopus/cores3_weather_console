@@ -9,6 +9,10 @@ enum class DeviceRemoteCommandType : uint8_t {
 	Page,
 	Touch,
 	Sound,
+	Refresh,
+	WifiScan,
+	WifiConnect,
+	Restart,
 };
 
 struct DeviceRemoteCommand {

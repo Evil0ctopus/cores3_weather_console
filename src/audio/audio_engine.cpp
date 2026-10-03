@@ -205,10 +205,20 @@ void AudioEngine::setTheme(ThemeId themeId, const String& themeName) {
   emitEvent("theme_changed", currentThemeName_);
 }
 
-void AudioEngine::play(SoundType type, uint8_t volumeOverride) {
+void AudioEngine::play(SoundType type, uint8_t volumeOverride, bool preview) {
   if (!initialized_ || muted_) {
     return;
   }
+  const bool alert = type == SoundType::WeatherSevereAlert || type == SoundType::WeatherTornadoWarning ||
+      type == SoundType::WeatherFloodWarning;
+  if (quiet_ && !(alert && controls_.quietAlertOverride)) return;
+  if (!preview && alert && !controls_.soundAlerts) return;
+  if (!preview && type <= SoundType::BootReady && !controls_.soundStartup) return;
+  if ((type == SoundType::TouchTap || type == SoundType::TouchLongPressRise || type == SoundType::SwipeWhoosh) &&
+      !preview && !controls_.soundTouch) return;
+  if ((type == SoundType::PageTransitionWhoosh || type == SoundType::SystemInfoPageTone) &&
+      !preview && !controls_.soundNavigation) return;
+  if (!preview && type >= SoundType::RadarUpdatePing && !controls_.soundSystem) return;
 
   if (playbackQueue_.size() >= kMaxQueueSize) {
     ::gDebugLog.log("AudioEngine", "Playback queue full, dropping sound");
@@ -236,6 +246,26 @@ void AudioEngine::play(SoundType type, uint8_t volumeOverride) {
   item.durationMs = foundSound->durationMs;
   item.isPlaying = false;
   playbackQueue_.push(item);
+}
+
+void AudioEngine::testSpeaker() {
+  play(SoundType::BootReady, 0, true);
+}
+
+void AudioEngine::setAlertActive(bool active) {
+  if (alertActive_ == active) return;
+  alertActive_ = active;
+  if (!active) {
+    if (currentPlayback_ != nullptr && currentPlayback_->type >= SoundType::WeatherSevereAlert &&
+        currentPlayback_->type <= SoundType::WeatherFloodWarning) stop();
+    std::queue<PlaybackItem> remaining;
+    while (!playbackQueue_.empty()) {
+      const PlaybackItem item = playbackQueue_.front();
+      playbackQueue_.pop();
+      if (item.type < SoundType::WeatherSevereAlert || item.type > SoundType::WeatherFloodWarning) remaining.push(item);
+    }
+    playbackQueue_.swap(remaining);
+  }
 }
 
 void AudioEngine::stop() {
@@ -285,10 +315,29 @@ uint8_t AudioEngine::getMasterVolume() const {
 }
 
 void AudioEngine::setMuted(bool muted) {
+  if (muted_ == muted) return;
   muted_ = muted;
   if (muted_) {
     stopAll();
   }
+}
+
+void AudioEngine::configure(const app::ControlSettings& settings, bool quiet) {
+  const bool categoriesChanged = controls_.soundTouch != settings.soundTouch ||
+      controls_.soundNavigation != settings.soundNavigation || controls_.soundStartup != settings.soundStartup ||
+      controls_.soundAlerts != settings.soundAlerts || controls_.soundSystem != settings.soundSystem ||
+      controls_.quietAlertOverride != settings.quietAlertOverride;
+  const bool stopForQuiet = quiet && !quiet_;
+  if (currentThemeName_ != settings.soundPack) {
+    stopAll();
+    setTheme(ThemeId::Default, settings.soundPack);
+  }
+  controls_ = settings;
+  quiet_ = quiet;
+  const uint8_t volume = static_cast<uint8_t>(settings.soundVolume * 255U / 100U);
+  if (masterVolume_ != volume) setMasterVolume(volume);
+  setMuted(settings.soundMuted || settings.soundVolume == 0);
+  if (stopForQuiet || categoriesChanged) stopAll();
 }
 
 bool AudioEngine::isMuted() const {
@@ -477,7 +526,7 @@ SoundType AudioEngine::touchKindToSound(uint8_t touchKind) const {
 }
 
 bool AudioEngine::shouldLoopSound(SoundType type) const {
-  return type == SoundType::WeatherTornadoWarning;
+  return alertActive_ && type == SoundType::WeatherTornadoWarning;
 }
 
 uint8_t AudioEngine::effectiveVolume(uint8_t soundVolume) const {

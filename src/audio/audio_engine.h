@@ -5,6 +5,7 @@
 #include <memory>
 #include <queue>
 #include <vector>
+#include "../system/control_settings.h"
 
 namespace audio {
 
@@ -91,7 +92,9 @@ class AudioEngine {
 	void setTheme(ThemeId themeId, const String& themeName = String());
 
 	// Playback control
-	void play(SoundType type, uint8_t volumeOverride = 0);
+	void play(SoundType type, uint8_t volumeOverride = 0, bool preview = false);
+	void testSpeaker();
+	void setAlertActive(bool active);
 	void stop();
 	void stopAll();
 	void pause();
@@ -101,6 +104,7 @@ class AudioEngine {
 	void setMasterVolume(uint8_t volume);  // 0-255
 	uint8_t getMasterVolume() const;
 	void setMuted(bool muted);
+	void configure(const app::ControlSettings& settings, bool quiet);
 	bool isMuted() const;
 
 	// Status queries
@@ -166,6 +170,9 @@ class AudioEngine {
 	bool playing_;
 	bool paused_;
 	bool muted_;
+	app::ControlSettings controls_;
+	bool quiet_ = false;
+	bool alertActive_ = false;
 	uint8_t masterVolume_;
 	ThemeId currentTheme_;
 	String currentThemeName_;

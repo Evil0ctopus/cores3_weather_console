@@ -24,6 +24,18 @@ const char* kKeyRadarSmoothPasses = "radar_smooth";
 const char* kKeyDebugMode = "debug_mode";
 const char* kKeyUpdateMinutes = "upd_min";
 
+class SettingsLock {
+ public:
+	explicit SettingsLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+		if (mutex_ != nullptr) xSemaphoreTake(mutex_, portMAX_DELAY);
+	}
+	~SettingsLock() {
+		if (mutex_ != nullptr) xSemaphoreGive(mutex_);
+	}
+ private:
+	SemaphoreHandle_t mutex_;
+};
+
 String normalized(const String& value) {
 	String out = value;
 	out.trim();
@@ -59,6 +71,11 @@ bool isValidRadarModeRaw(uint8_t raw) {
 }  // namespace
 
 bool SettingsStore::begin() {
+	if (mutex_ == nullptr) mutex_ = xSemaphoreCreateMutex();
+	if (mutex_ == nullptr) {
+		Serial.println("[SETTINGS] ERROR: could not allocate settings mutex.");
+		return false;
+	}
 	initialized_ = true;
 	settings_ = defaults();
 	return loadFromNvs();
@@ -71,7 +88,16 @@ bool SettingsStore::reload() {
 	return loadFromNvs();
 }
 
-bool SettingsStore::save(const AppSettings& settings) {
+bool SettingsStore::save(const AppSettings& settings, uint32_t expectedRevision) {
+	if (mutex_ == nullptr) {
+		Serial.println("[SETTINGS] ERROR: settings store has not started.");
+		return false;
+	}
+	SettingsLock lock(mutex_);
+	if (expectedRevision != UINT32_MAX && expectedRevision != revision_.load()) {
+		Serial.println("[SETTINGS] ERROR: settings changed during editing; retry.");
+		return false;
+	}
 	Preferences prefs;
 	if (!prefs.begin(kNamespace, false)) {
 		return false;
@@ -84,24 +110,33 @@ bool SettingsStore::save(const AppSettings& settings) {
 		return false;
 	}
 
-	prefs.putString(kKeyLocationQuery, clean.locationQuery);
-	prefs.putString(kKeyLocationKey, clean.locationKey);
-	prefs.putString(kKeyLocationName, clean.locationName);
-	prefs.putString(kKeyApiKey, clean.apiKey);
-	prefs.putString(kKeyWifiSsid, clean.wifiSsid);
-	prefs.putString(kKeyWifiPassword, clean.wifiPassword);
-	prefs.putBool(kKeyWifiAutoConnect, clean.wifiAutoConnect);
-	prefs.putUChar(kKeyUnits, static_cast<uint8_t>(clean.units));
-	prefs.putUChar(kKeyTheme, static_cast<uint8_t>(clean.theme));
-	prefs.putUChar(kKeyRadarMode, static_cast<uint8_t>(clean.radarMode));
-	prefs.putBool(kKeyRadarAutoContrast, clean.radarAutoContrast);
-	prefs.putBool(kKeyRadarInterpolation, clean.radarInterpolation);
-	prefs.putBool(kKeyRadarOverlays, clean.radarStormOverlays);
-	prefs.putUChar(kKeyRadarInterpSteps, clampRadarInterpolationSteps(clean.radarInterpolationSteps));
-	prefs.putUChar(kKeyRadarSmoothPasses, clampRadarSmoothingPasses(clean.radarSmoothingPasses));
-	prefs.putBool(kKeyDebugMode, clean.debugMode);
-	prefs.putUInt(kKeyUpdateMinutes, clean.updateIntervalMinutes);
+	bool written = prefs.putString(kKeyLocationQuery, clean.locationQuery) == clean.locationQuery.length();
+	written &= prefs.putString(kKeyLocationKey, clean.locationKey) == clean.locationKey.length();
+	written &= prefs.putString(kKeyLocationName, clean.locationName) == clean.locationName.length();
+	written &= prefs.putString(kKeyApiKey, clean.apiKey) == clean.apiKey.length();
+	written &= prefs.putString(kKeyWifiSsid, clean.wifiSsid) == clean.wifiSsid.length();
+	written &= prefs.putString(kKeyWifiPassword, clean.wifiPassword) == clean.wifiPassword.length();
+	written &= prefs.putBool(kKeyWifiAutoConnect, clean.wifiAutoConnect) == sizeof(uint8_t);
+	written &= prefs.putUChar(kKeyUnits, static_cast<uint8_t>(clean.units)) == sizeof(uint8_t);
+	written &= prefs.putUChar(kKeyTheme, static_cast<uint8_t>(clean.theme)) == sizeof(uint8_t);
+	written &= prefs.putUChar(kKeyRadarMode, static_cast<uint8_t>(clean.radarMode)) == sizeof(uint8_t);
+	written &= prefs.putBool(kKeyRadarAutoContrast, clean.radarAutoContrast) == sizeof(uint8_t);
+	written &= prefs.putBool(kKeyRadarInterpolation, clean.radarInterpolation) == sizeof(uint8_t);
+	written &= prefs.putBool(kKeyRadarOverlays, clean.radarStormOverlays) == sizeof(uint8_t);
+	written &= prefs.putUChar(kKeyRadarInterpSteps, clampRadarInterpolationSteps(clean.radarInterpolationSteps)) == sizeof(uint8_t);
+	written &= prefs.putUChar(kKeyRadarSmoothPasses, clampRadarSmoothingPasses(clean.radarSmoothingPasses)) == sizeof(uint8_t);
+	written &= prefs.putBool(kKeyDebugMode, clean.debugMode) == sizeof(uint8_t);
+	written &= prefs.putUInt(kKeyUpdateMinutes, clean.updateIntervalMinutes) == sizeof(uint32_t);
+	JsonDocument controls;
+	writeControlSettings(controls, clean.controls);
+	String controlsJson;
+	serializeJson(controls, controlsJson);
+	const bool controlsWritten = prefs.putString("controls", controlsJson) == controlsJson.length();
 	prefs.end();
+	if (!written || !controlsWritten) {
+		Serial.println("[SETTINGS] ERROR: could not persist settings.");
+		return false;
+	}
 
 	settings_ = clean;
 	++revision_;
@@ -109,6 +144,11 @@ bool SettingsStore::save(const AppSettings& settings) {
 }
 
 bool SettingsStore::saveWifiSettings(const String& ssid, const String& password, bool autoConnect) {
+	if (mutex_ == nullptr) {
+		Serial.println("[SETTINGS] ERROR: settings store has not started.");
+		return false;
+	}
+	SettingsLock lock(mutex_);
 	Preferences prefs;
 	if (!prefs.begin(kNamespace, false)) {
 		return false;
@@ -130,11 +170,13 @@ bool SettingsStore::saveWifiSettings(const String& ssid, const String& password,
 	return true;
 }
 
-const AppSettings& SettingsStore::settings() const {
+AppSettings SettingsStore::settings() const {
+	SettingsLock lock(mutex_);
 	return settings_;
 }
 
 ui::ThemeId SettingsStore::get_theme() const {
+	SettingsLock lock(mutex_);
 	return settings_.theme;
 }
 
@@ -142,10 +184,15 @@ bool SettingsStore::set_theme(ui::ThemeId theme) {
 	if (!initialized_) {
 		begin();
 	}
+	if (mutex_ == nullptr) {
+		Serial.println("[SETTINGS] ERROR: settings store has not started.");
+		return false;
+	}
 	if (static_cast<uint8_t>(theme) >= ui::theme_count()) {
 		Serial.println("[SETTINGS] ERROR: invalid theme.");
 		return false;
 	}
+	SettingsLock lock(mutex_);
 	Preferences prefs;
 	if (!prefs.begin(kNamespace, false)) {
 		Serial.println("[SETTINGS] ERROR: could not open theme preferences.");
@@ -163,7 +210,7 @@ bool SettingsStore::set_theme(ui::ThemeId theme) {
 }
 
 uint32_t SettingsStore::revision() const {
-	return revision_;
+	return revision_.load();
 }
 
 AppSettings SettingsStore::defaults() {
@@ -200,6 +247,7 @@ uint32_t SettingsStore::clampUpdateIntervalMinutes(uint32_t minutes) {
 }
 
 bool SettingsStore::loadFromNvs() {
+	SettingsLock lock(mutex_);
 	Preferences prefs;
 	if (!prefs.begin(kNamespace, true)) {
 		settings_ = defaults();
@@ -227,6 +275,15 @@ bool SettingsStore::loadFromNvs() {
 	loaded.radarSmoothingPasses = clampRadarSmoothingPasses(prefs.getUChar(kKeyRadarSmoothPasses, loaded.radarSmoothingPasses));
 	loaded.debugMode = prefs.getBool(kKeyDebugMode, loaded.debugMode);
 	loaded.updateIntervalMinutes = clampUpdateIntervalMinutes(prefs.getUInt(kKeyUpdateMinutes, loaded.updateIntervalMinutes));
+	const String controlsJson = prefs.getString("controls", "");
+	if (controlsJson.length() > 0) {
+		JsonDocument controls;
+		String error;
+		if (deserializeJson(controls, controlsJson) || !readControlSettings(controls.as<JsonVariantConst>(), loaded.controls, error)) {
+			Serial.printf("[SETTINGS] ERROR: stored controls invalid: %s; using defaults\n", error.c_str());
+			loaded.controls = ControlSettings();
+		}
+	}
 	String validationError;
 	validateSettings(loaded, validationError, false);
 	prefs.end();
@@ -298,6 +355,43 @@ bool parseRadarMode(const String& value, RadarMode& out) {
 }
 
 void writeSettingsJson(JsonDocument& doc, const AppSettings& settings) {
+	writeControlSettings(doc, settings.controls);
+	JsonArray schema = doc["controlSchema"].to<JsonArray>();
+	const char* groups[] = {"Sound", "LEDs", "Display", "Quiet Hours"};
+	for (size_t i = 0; i < kChoiceControlCount; ++i) {
+		const auto& field = kChoiceControls[i];
+		JsonObject item = schema.add<JsonObject>();
+		item["key"] = field.key;
+		item["label"] = field.label;
+		item["group"] = groups[static_cast<uint8_t>(field.group)];
+		item["type"] = "choice";
+		JsonArray options = item["options"].to<JsonArray>();
+		for (uint16_t index = 0; ; ++index) {
+			const String value = choiceAt(field.values, index);
+			if (value.length() == 0) break;
+			JsonObject option = options.add<JsonObject>();
+			option["value"] = value;
+			option["label"] = choiceAt(field.labels, index);
+		}
+	}
+	for (size_t i = 0; i < kNumberControlCount; ++i) {
+		const auto& field = kNumberControls[i];
+		JsonObject item = schema.add<JsonObject>();
+		item["key"] = field.key;
+		item["label"] = field.label;
+		item["group"] = groups[static_cast<uint8_t>(field.group)];
+		item["type"] = "number";
+		item["min"] = field.min;
+		item["max"] = field.max;
+	}
+	for (size_t i = 0; i < kBoolControlCount; ++i) {
+		const auto& field = kBoolControls[i];
+		JsonObject item = schema.add<JsonObject>();
+		item["key"] = field.key;
+		item["label"] = field.label;
+		item["group"] = groups[static_cast<uint8_t>(field.group)];
+		item["type"] = "boolean";
+	}
 	doc["locationQuery"] = settings.locationQuery;
 	doc["locationKey"] = settings.locationKey;
 	doc["locationName"] = settings.locationName;
@@ -509,12 +603,14 @@ bool readSettingsJson(JsonVariantConst source,
 		next.updateIntervalMinutes = SettingsStore::clampUpdateIntervalMinutes(value);
 	}
 
+	if (!readControlSettings(source, next.controls, outError)) return false;
 	out = next;
 	outError = "";
 	return true;
 }
 
 bool validateSettings(AppSettings& settings, String& outError, bool requireResolvedLocationKey) {
+	if (!validateControlSettings(settings.controls, outError)) return false;
 	settings.locationQuery = normalized(settings.locationQuery);
 	settings.locationKey = normalized(settings.locationKey);
 	settings.locationName = normalized(settings.locationName);
@@ -524,9 +620,14 @@ bool validateSettings(AppSettings& settings, String& outError, bool requireResol
 	settings.radarInterpolationSteps = clampRadarInterpolationSteps(settings.radarInterpolationSteps);
 	settings.radarSmoothingPasses = clampRadarSmoothingPasses(settings.radarSmoothingPasses);
 
-	if (settings.locationQuery.length() == 0) {
+	if (settings.locationQuery.length() == 0 && requireResolvedLocationKey) {
 		outError = "Location is required.";
 		settings.valid = false;
+		return false;
+	}
+	if (settings.locationQuery.length() > 100 || settings.wifiSsid.length() > 32 ||
+			(settings.wifiPassword.length() != 0 && (settings.wifiPassword.length() < 8 || settings.wifiPassword.length() > 63))) {
+		outError = "Location or WiFi credential length is invalid.";
 		return false;
 	}
 	const bool requiresResolvedLocationKey = requireResolvedLocationKey && settings.apiKey.length() > 0;

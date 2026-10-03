@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">Core Weather Console</p>
           <h1>Device Settings</h1>
-          <p class="hero-copy">Tune location, weather cadence, theme, and radar behavior. The panel previews draft changes instantly and syncs applied settings back into NVS and the running firmware.</p>
+          <p class="hero-copy">Control location, units, sound, LEDs, display and quiet hours here or on the device. Both use the same saved preferences.</p>
         </div>
         <div class="hero-status">
           <span class="pill" id="syncPill">Live Sync</span>
@@ -51,6 +51,8 @@
             <button class="secondary-button" id="remoteGoPage" type="button">Go to screen</button>
             <button class="secondary-button" id="remoteSound" type="button">Test speaker</button>
             <button class="secondary-button" id="remoteRefresh" type="button">Refresh view</button>
+            <button class="secondary-button" id="weatherRefresh" type="button">Refresh weather</button>
+            <button class="secondary-button" id="deviceRestart" type="button">Restart device</button>
             <label class="remote-auto"><input id="remoteAutoRefresh" type="checkbox" checked> Auto refresh</label>
           </div>
         </div>
@@ -223,6 +225,9 @@
             <input id="debugMode" name="debugMode" type="checkbox">
             <small>Enable serial traces, on-screen overlay, and the web debug console.</small>
           </label>
+
+          <div id="controlCenter" aria-label="System controls"></div>
+          <p class="hero-copy">Active Weather follows day/night and current conditions. Flowing Rainbow, solid colors, breathing and Off are also available. Quiet hours use weather-location local time; equal start/end means all day. Mute always wins. Dim after 0 seconds means never.</p>
 
           <div class="meta-row">
             <div>

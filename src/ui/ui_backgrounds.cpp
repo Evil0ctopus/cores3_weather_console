@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <esp_heap_caps.h>
+#include <PNGdec.h>
+#include <new>
 
 #include "ui_assets.h"
 
@@ -14,6 +16,69 @@ lv_obj_t* gBackgroundGlowTop = nullptr;
 lv_obj_t* gBackgroundGlowBottom = nullptr;
 lv_img_dsc_t gAuroraDescriptor = {};
 uint8_t* gAuroraPixels = nullptr;
+lv_img_dsc_t gThemeDescriptor = {};
+lv_color_t* gThemePixels = nullptr;
+
+struct BackdropDecode {
+	PNG* decoder;
+	lv_color_t* pixels;
+};
+
+int decode_backdrop_line(PNGDRAW* draw) {
+	auto* context = static_cast<BackdropDecode*>(draw->pUser);
+	context->decoder->getLineAsRGB565(draw,
+		reinterpret_cast<uint16_t*>(context->pixels + draw->y * 320),
+		PNG_RGB565_LITTLE_ENDIAN, 0);
+	return 1;
+}
+
+bool load_native_theme(lv_obj_t* image, const char* path) {
+	File file = SPIFFS.open(path, FILE_READ);
+	const size_t size = file ? file.size() : 0;
+	if (size == 0 || size > 256U * 1024U) {
+		Serial.printf("[BG] ERROR: missing or oversized artwork: %s\n", path);
+		return false;
+	}
+	constexpr size_t kPixels = 320U * 240U * sizeof(lv_color_t);
+	if (gThemePixels == nullptr) {
+		gThemePixels = static_cast<lv_color_t*>(heap_caps_malloc(kPixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+	}
+	auto* source = static_cast<uint8_t*>(heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+	PNG* decoder = new (std::nothrow) PNG();
+	if (gThemePixels == nullptr || source == nullptr || decoder == nullptr) {
+		heap_caps_free(source);
+		delete decoder;
+		Serial.println("[BG] ERROR: artwork decode allocation failed");
+		return false;
+	}
+	bool success = file.read(source, size) == size;
+	bool opened = false;
+	if (success) {
+		opened = decoder->openRAM(source, static_cast<int>(size), decode_backdrop_line) == PNG_SUCCESS;
+		success = opened && decoder->getWidth() == 320 && decoder->getHeight() == 240;
+	}
+	if (success) {
+		lv_img_cache_invalidate_src(&gThemeDescriptor);
+		BackdropDecode context{decoder, gThemePixels};
+		success = decoder->decode(&context, PNG_FAST_PALETTE) == PNG_SUCCESS;
+	}
+	if (opened) decoder->close();
+	delete decoder;
+	heap_caps_free(source);
+	if (!success) {
+		Serial.printf("[BG] ERROR: artwork read/decode failed: %s\n", path);
+		return false;
+	}
+	gThemeDescriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
+	gThemeDescriptor.header.w = 320;
+	gThemeDescriptor.header.h = 240;
+	gThemeDescriptor.data_size = kPixels;
+	gThemeDescriptor.data = reinterpret_cast<const uint8_t*>(gThemePixels);
+	lv_img_set_src(image, &gThemeDescriptor);
+	lv_obj_invalidate(image);
+	Serial.printf("[BG] Original artwork resident in PSRAM: %s\n", path);
+	return true;
+}
 
 bool load_native_aurora(lv_obj_t* image) {
 	if (gAuroraPixels == nullptr) {
@@ -111,43 +176,30 @@ void ensure_background_decor(lv_obj_t* root, ThemeId theme) {
 	lv_obj_move_background(gBackgroundGlowTop);
 }
 
-const char* fallback_path_for_theme(ThemeId theme) {
-	switch (theme) {
-		case ThemeId::PIXEL_STORM:
-			return "/backgrounds/bgps.png";
-		case ThemeId::DESERT_CALM:
-			return "/backgrounds/bgdc.png";
-		case ThemeId::FUTURE_PULSE:
-			return "/backgrounds/bgfp.png";
-		default:
-			return "/backgrounds/current.png";
-	}
-}
-
 const char* path_for_theme(ThemeId theme) {
 	switch (theme) {
 		case ThemeId::PIXEL_STORM:
 			return "/backgrounds/neon_aurora.png";
 		case ThemeId::DESERT_CALM:
-			return "/backgrounds/desert_calm.png";
+			return "/themes/desert_calm.png";
 		case ThemeId::FUTURE_PULSE:
-			return "/backgrounds/future_pulse.png";
+			return "/themes/future_pulse.png";
 		case ThemeId::MIDNIGHT_RADAR:
-			return "/backgrounds/bgmr.png";
+			return "/themes/midnight_radar.png";
 		case ThemeId::DAYBREAK_CLEAR:
-			return "/backgrounds/bgdb.png";
+			return "/themes/daybreak_clear.png";
 		case ThemeId::STORMGLASS:
-			return "/backgrounds/bgsg.png";
+			return "/themes/stormglass.png";
 		case ThemeId::AURORA_LINE:
-			return "/backgrounds/bgal.png";
+			return "/themes/aurora_line.png";
 		case ThemeId::OCEAN_FRONT:
-			return "/backgrounds/bgof.png";
+			return "/themes/ocean_front.png";
 		case ThemeId::MONO_WIREFRAME:
-			return "/backgrounds/bgmw.png";
+			return "/themes/mono_wireframe.png";
 		case ThemeId::INFRARED_SCAN:
-			return "/backgrounds/bgis.png";
+			return "/themes/infrared_scan.png";
 	}
-	return "/backgrounds/pixel_storm.png";
+	return "/backgrounds/neon_aurora.png";
 }
 
 void apply_background_fallback(lv_obj_t* root, ThemeId theme, const char* reason) {
@@ -201,6 +253,8 @@ void ui_background_update(lv_obj_t* root, ThemeId theme) {
 	if (root == nullptr || gBackgroundImage == nullptr) {
 		return;
 	}
+	lv_obj_add_flag(gBackgroundGlowTop, LV_OBJ_FLAG_HIDDEN);
+	lv_obj_add_flag(gBackgroundGlowBottom, LV_OBJ_FLAG_HIDDEN);
 	if (theme == ThemeId::PIXEL_STORM) {
 		lv_obj_add_flag(gBackgroundGlowTop, LV_OBJ_FLAG_HIDDEN);
 		lv_obj_add_flag(gBackgroundGlowBottom, LV_OBJ_FLAG_HIDDEN);
@@ -209,8 +263,12 @@ void ui_background_update(lv_obj_t* root, ThemeId theme) {
 			return;
 		}
 	} else {
-		lv_obj_clear_flag(gBackgroundGlowTop, LV_OBJ_FLAG_HIDDEN);
-		lv_obj_clear_flag(gBackgroundGlowBottom, LV_OBJ_FLAG_HIDDEN);
+		if (load_native_theme(gBackgroundImage, path_for_theme(theme))) {
+			lv_obj_clear_flag(gBackgroundImage, LV_OBJ_FLAG_HIDDEN);
+		} else {
+			apply_background_fallback(root, theme, "original artwork unavailable");
+		}
+		return;
 	}
 
 	const char* preferred = path_for_theme(theme);
@@ -219,20 +277,8 @@ void ui_background_update(lv_obj_t* root, ThemeId theme) {
 	AssetLoadResult result = ui_asset_load_png(gBackgroundImage, preferred);
 	if (!result.success) {
 		Serial.println("[ASSET] Auto-recovery engaged");
-		const char* fallback = fallback_path_for_theme(theme);
-		Serial.printf("[BG] Loading: %s\n", fallback);
-		Serial.printf("[BG] Exists: %d\n", SPIFFS.exists(fallback) ? 1 : 0);
-		AssetLoadResult fallbackResult = ui_asset_load_png(gBackgroundImage, fallback);
-		if (!fallbackResult.success) {
-			Serial.println("[BG] Decode failed, using fallback color");
-			apply_background_fallback(root, theme, fallbackResult.error.c_str());
-			ui_asset_log_status(fallbackResult);
-			return;
-		}
-		ui_asset_log_status(fallbackResult);
-		Serial.printf("[BG] Load success: %s\n", fallback);
-		update_background_decor(theme);
-		lv_obj_clear_flag(gBackgroundImage, LV_OBJ_FLAG_HIDDEN);
+		apply_background_fallback(root, theme, result.error.c_str());
+		ui_asset_log_status(result);
 		return;
 	}
 

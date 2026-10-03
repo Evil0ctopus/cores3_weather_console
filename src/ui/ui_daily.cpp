@@ -121,10 +121,12 @@ void DailyPage::applyTheme(ThemeManager& theme) {
 			ui_icon_delete(rowIcons_[i]);
 			rowIcons_[i] = nullptr;
 		}
-		rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLOUDY, theme.themeId());
+		const IconId id = rowIconSet_[i] ? rowIconIds_[i] : IconId::ICON_CLOUDY;
+		rowIcons_[i] = ui_icon_create(rowCards_[i], id, theme.themeId());
 		if (rowIcons_[i] != nullptr) {
 			ui_icon_set_size(rowIcons_[i], 36, 36);
-			rowIconIds_[i] = IconId::ICON_CLOUDY;
+			lv_obj_move_to_index(rowIcons_[i], 0);
+			rowIconIds_[i] = id;
 			rowIconSet_[i] = true;
 		}
 	}
@@ -151,6 +153,7 @@ void DailyPage::update(const WeatherData& data, bool imperial) {
 				rowIcons_[i] = ui_icon_create(rowCards_[i], IconId::ICON_CLEAR_DAY, theme_->themeId());
 				if (rowIcons_[i] != nullptr) {
 					ui_icon_set_size(rowIcons_[i], 36, 36);
+					lv_obj_move_to_index(rowIcons_[i], 0);
 					rowIconIds_[i] = IconId::ICON_CLEAR_DAY;
 					rowIconSet_[i] = true;
 				}
@@ -170,6 +173,7 @@ void DailyPage::update(const WeatherData& data, bool imperial) {
 			rowIcons_[i] = ui_icon_create(rowCards_[i], iconId, theme_->themeId());
 			if (rowIcons_[i] != nullptr) {
 				ui_icon_set_size(rowIcons_[i], 36, 36);
+				lv_obj_move_to_index(rowIcons_[i], 0);
 				rowIconIds_[i] = iconId;
 				rowIconSet_[i] = true;
 			}

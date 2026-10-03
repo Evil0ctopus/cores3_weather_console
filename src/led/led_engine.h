@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../weather/weather_models.h"
+#include "../system/control_settings.h"
 
 namespace m5 {
 class LED_Strip_Class;
@@ -48,6 +49,8 @@ class LedEngine {
 	void update();
 
 	void updateWeatherMood(const WeatherData& data);
+	void configure(const app::ControlSettings& settings, bool quiet);
+	void writeStatus(JsonDocument& doc) const;
 	void pageTransition(uint8_t fromPage, uint8_t toPage);
 	void touchEvent(TouchKind kind, int16_t deltaX = 0, int16_t deltaY = 0);
 	void alert(AlertLevel level, const String& message = String(), uint32_t durationMs = 0);
@@ -182,6 +185,10 @@ class LedEngine {
 	std::vector<std::shared_ptr<m5::LED_Strip_Class>> externalStrips_;
 
 	MoodPalette mood_;
+	app::ControlSettings controls_;
+	bool quiet_ = false;
+	bool weatherFresh_ = false;
+	uint8_t weatherEffect_ = 0;
 	TransitionState transition_;
 	TouchState touch_;
 	AlertState alert_;

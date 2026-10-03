@@ -2,8 +2,12 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "../ui/ui_theme.h"
+#include "control_settings.h"
 
 namespace app {
 
@@ -19,6 +23,7 @@ enum class RadarMode : uint8_t {
 };
 
 struct AppSettings {
+	ControlSettings controls;
 	String locationQuery;
 	String locationKey;
 	String locationName;
@@ -43,10 +48,10 @@ class SettingsStore {
  public:
 	bool begin();
 	bool reload();
-	bool save(const AppSettings& settings);
+	bool save(const AppSettings& settings, uint32_t expectedRevision = UINT32_MAX);
 	bool saveWifiSettings(const String& ssid, const String& password, bool autoConnect);
 
-	const AppSettings& settings() const;
+	AppSettings settings() const;
 	ui::ThemeId get_theme() const;
 	bool set_theme(ui::ThemeId theme);
 	uint32_t revision() const;
@@ -58,7 +63,8 @@ class SettingsStore {
 	bool loadFromNvs();
 
 	AppSettings settings_{};
-	uint32_t revision_ = 0;
+	std::atomic<uint32_t> revision_{0};
+	SemaphoreHandle_t mutex_ = nullptr;
 	bool initialized_ = false;
 };
 

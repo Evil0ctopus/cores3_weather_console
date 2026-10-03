@@ -20,7 +20,7 @@ void style_title_chip(lv_obj_t* obj, ThemeManager& theme, const char* text) {
 
 void style_meta_chip(lv_obj_t* obj, ThemeManager& theme) {
 	lv_obj_add_style(obj, theme.chipStyle(), LV_PART_MAIN);
-	lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
 	lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN);
 }
 

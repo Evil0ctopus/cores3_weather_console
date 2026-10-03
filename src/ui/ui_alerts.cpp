@@ -49,7 +49,7 @@ void AlertsPage::begin(lv_obj_t* parent, ThemeManager& theme) {
 
 	subtitle_ = lv_label_create(root_);
 	lv_obj_add_style(subtitle_, theme.chipStyle(), LV_PART_MAIN);
-	lv_obj_set_style_bg_opa(subtitle_, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(subtitle_, LV_OPA_COVER, LV_PART_MAIN);
 	lv_label_set_text(subtitle_, "All clear");
 	lv_obj_align(subtitle_, LV_ALIGN_TOP_RIGHT, 0, 0);
 
@@ -88,7 +88,7 @@ void AlertsPage::applyTheme(ThemeManager& theme) {
 	lv_obj_set_style_pad_all(root_, theme.spacing().cardPadding, LV_PART_MAIN);
 	style_title_chip(title_, theme, "Alerts");
 	lv_obj_add_style(subtitle_, theme.chipStyle(), LV_PART_MAIN);
-	lv_obj_set_style_bg_opa(subtitle_, LV_OPA_70, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(subtitle_, LV_OPA_COVER, LV_PART_MAIN);
 	for (size_t i = 0; i < kMaxWeatherAlerts; ++i) {
 		lv_obj_add_style(rows_[i], theme.cardAltStyle(), LV_PART_MAIN);
 		lv_obj_set_style_text_color(rows_[i], theme.palette().textPrimary, LV_PART_MAIN);

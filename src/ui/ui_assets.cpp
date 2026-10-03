@@ -68,11 +68,16 @@ lv_fs_res_t spiffsTell(lv_fs_drv_t* /*driver*/, void* fileHandle, uint32_t* posi
 }
 
 const char* const kRequiredBackgrounds[] = {
-	"/backgrounds/current.png",
-	"/backgrounds/weekly.png",
-	"/backgrounds/radar.png",
-	"/backgrounds/alerts.png",
-	"/backgrounds/system.png",
+	"/backgrounds/neon_aurora.png",
+	"/themes/desert_calm.png",
+	"/themes/future_pulse.png",
+	"/themes/midnight_radar.png",
+	"/themes/daybreak_clear.png",
+	"/themes/stormglass.png",
+	"/themes/aurora_line.png",
+	"/themes/ocean_front.png",
+	"/themes/mono_wireframe.png",
+	"/themes/infrared_scan.png",
 };
 
 }  // namespace
@@ -210,24 +215,13 @@ void ui_asset_startup_report() {
 		}
 	}
 
-	uint8_t bootFrames = 0;
-	for (uint8_t i = 0; i < 30; ++i) {
-		char path[24] = {0};
-		snprintf(path, sizeof(path), "/boot/frame_%03u.png", static_cast<unsigned>(i));
-		if (!SPIFFS.exists(path)) {
-			break;
-		}
-		bootFrames++;
-	}
+	const bool bootArtwork = SPIFFS.exists("/boot/neon_intro.png");
+	if (!bootArtwork) Serial.println("[ASSET] MISSING boot artwork=/boot/neon_intro.png");
 
-	if (bootFrames == 0) {
-		Serial.println("[ASSET] MISSING boot frames under /boot/frame_000.png...");
-	}
-
-	Serial.printf("[ASSET] Startup report: backgrounds=%u/%u bootFrames=%u\n",
+	Serial.printf("[ASSET] Startup report: backgrounds=%u/%u bootArtwork=%u\n",
 		static_cast<unsigned>(bgFound),
 		static_cast<unsigned>(bgTotal),
-		static_cast<unsigned>(bootFrames));
+		bootArtwork ? 1U : 0U);
 }
 
 }  // namespace ui

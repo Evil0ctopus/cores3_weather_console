@@ -31,10 +31,72 @@ Wi-Fi credentials and weather API settings are configured on-device (captive pro
 
 ---
 
+## System Control Center
+
+Open **System** from the Home hub. The device and web portal share persisted
+preferences; a change made in either is applied to the running console and
+synchronized to the other.
+
+* **Location & Weather:** Enter a US ZIP or city/state with the on-screen
+  keyboard. Lookup runs on a worker, so the touch UI stays responsive. Review
+  the resolved place and tap **Confirm place** to save it. An AccuWeather API
+  key is optional; blank uses Open-Meteo. Set a 1-60 minute current/alert
+  refresh interval or request an immediate weather/radar refresh.
+* **Units:** Metric (C, kph, millibars) or Imperial (F, mph, inHg), applied to
+  displayed values immediately without changing the metric weather model.
+* **Sound:** Volume, master mute, Default/Modern/Retro/Minimal packs, and
+  separate touch, navigation, startup, alert and system cues. Speaker testing
+  respects mute, zero volume and quiet hours.
+* **LEDs:** **Active Weather**, **Solid Color**, **Flowing Rainbow**,
+  **Breathing**, or **Off**. Presets are red, orange, yellow, green, cyan,
+  blue, purple and white. Brightness and effect speed are configurable.
+  Weather mode uses warm sunlight, cool night/cloud tones, moving rain/snow
+  accents and optional gentle thunderstorm pulses (not a rapid strobe).
+  Missing or more-than-two-hour-old conditions use a dim neutral base.
+  Touch/page feedback and alert overrides are independently selectable.
+  Off blanks the LEDs except when the explicitly enabled alert override applies.
+* **Display:** Theme, brightness, inactivity dim timeout (0 means never),
+  dim/night brightness and background/navigation animation preference.
+  Dimming never raises brightness above the normal setting; touch wakes the
+  inactivity-dimmed screen.
+* **WiFi:** Async network scan, network/password keyboard entry, auto reconnect,
+  and Save and connect. Network credentials remain stored only in device NVS.
+* **Quiet Hours:** Weather-location local start/end hours. Overnight and
+  same-day windows are supported; equal start/end means all day. Unknown local
+  time leaves quiet hours inactive. Optional sounds are silenced, LEDs are
+  quarter-brightness and the screen uses dim brightness. Alert override is
+  configurable; master mute and zero volume always win.
+* **Device & Diagnostics:** IP, connection/weather/radar/storage information,
+  confirmed restart, and confirmed restore of control/unit/theme preferences
+  (location and WiFi are preserved).
+
+Changes save automatically; numeric sliders save on release rather than writing
+NVS continuously. Location and WiFi use explicit confirmation/connection actions.
+Control changes do not reset weather/radar networking unless the location or
+provider actually changed. LED animations use the regular frame scheduler, not
+delays or per-frame network requests.
+
+USB `CONTROL_STATUS` reports applied audio/screen/LED brightness, mute, quiet-hour
+state, local hour, LED mode and last pushed RGB pixels. `UI_LABELS` includes
+visible labels, dropdown/checkbox/slider geometry and open editor/popup labels.
+Firmware and filesystem must both be uploaded for matching device/web controls.
+
+Regression checks (connected CoreS3; existing preferences are restored afterward):
+
+```powershell
+python scripts\verify_system_controls.py COM3 --url http://192.168.1.2 --reboot
+```
+
+The test checks schema/partial saves, invalid-input rejection, actual LED frame
+output, brightness/mute, dimming/quiet hours, device/web synchronization and
+restart persistence. Native quiet-hour boundary coverage is in
+`test/control_settings/test_quiet_hours.cpp`; the existing touch-buffer and
+navigation/Home regression checks remain applicable.
+
 ## Repository Structure
 
 * `src/` & `include/` — Firmware logic, UI controllers, and headers (`include/lv_conf.h` for LVGL).
-* `src/web/web_assets/` — SPIFFS payload (boot frames, backgrounds, audio, web UI). Mapped via `platformio.ini` `data_dir`.
+* `src/web/web_assets/` — SPIFFS payload (boot artwork, backgrounds, audio, web UI). Mapped via `platformio.ini` `data_dir`.
 * `data/` — Working/source asset copies (not the flash `data_dir`).
 * `scripts/` — Build helpers (e.g. git version stamp).
 
@@ -64,7 +126,7 @@ Connect the CoreS3 over USB-C. Let PlatformIO auto-detect the serial port (do no
 # Firmware
 pio run -t upload
 
-# SPIFFS assets (boot frames, backgrounds, audio, web UI)
+# SPIFFS assets (boot artwork, backgrounds, audio, web UI)
 pio run -t uploadfs
 ```
 
@@ -86,7 +148,7 @@ live weather, and remote controls require the CoreS3's own web server.
 
 The firmware uses CoreS3 PSRAM for LVGL allocations, including full-screen PNG
 decoding. Upload both firmware and SPIFFS assets after changing the artwork;
-uploading firmware alone leaves the previous boot frames on the device.
+uploading firmware alone leaves the previous artwork on the device.
 Run firmware upload and filesystem upload as separate PlatformIO commands.
 The boot screen loads one backdrop and animates LVGL overlays rather than
 decoding a full-screen PNG on every frame.
@@ -104,13 +166,33 @@ Its layout and touch targets are unchanged. Neon Storm (the existing
 device page and the web control panel. Only small star overlays animate;
 the full-screen aurora uses a resident 150 KiB RGB565 image in PSRAM, avoiding
 PNG decoding and alpha blending on navigation (PNG remains a logged fallback).
-Home opens pages directly instead of sliding through hidden pages; Neon Storm
-also uses direct adjacent-page changes to avoid multi-frame scroll stalls.
-Other themes retain adjacent-page slides. Background animation and vertical
-content scrolling remain enabled.
+All themes open and change pages directly, avoiding multi-frame tile-slide
+stalls. The Display animation setting still controls star overlays;
+vertical content scrolling remains enabled.
 Unchanged HUD text is not redrawn.
-The icon cache holds 24 entries to avoid churn between pages. Other selectable themes
-remain available; their device pages keep their original backgrounds.
+The icon cache holds 24 entries to avoid churn between pages.
+All ten themes share the redesigned rounded cards, palette-driven Home/HUD,
+readable light/dark System controls, and stable forecast icon ordering.
+`scripts/generate_theme_art.py` creates original 640x480 browser artwork and
+matching supersampled 320x240 device PNGs for the nine
+non-Neon themes: warm layered dunes, neon circuits, midnight radar rings,
+daybreak clouds, rain on storm glass, green aurora ribbons, ocean waves,
+perspective wireframe, and infrared contours. These are new compositions,
+not recolored legacy backgrounds. The portal uses the same artwork and palette.
+Device PNGs live under `themes/` to respect SPIFFS's 31-character path limit;
+browser versions live under `backgrounds/`.
+Unused legacy backgrounds and the old 60-frame boot sequence are no longer
+shipped, leaving filesystem headroom for the new artwork. The current boot
+intro still uses `boot/neon_intro.png` and retains its reveal animation.
+Firmware decodes each theme's PNG once when selected into a reusable 150 KiB
+RGB565 PSRAM buffer; normal page navigation never decodes it again.
+Theme switches preserve weather icons and their position in each forecast row.
+`scripts/verify_themes.py COM3 --url http://device-ip` checks all ten themes
+across seven screens, completed transitions below 350 ms, forecast icon order,
+quick/held Home taps and System Display controls. It compares live Home pixels
+against the generated device artwork, catching missing-image/color fallbacks,
+and restores the saved theme and dim timer. Pass `--output` to save screenshots
+for visual review, or `--themes` to run a focused subset.
 The cinematic boot intro uses original supersampled aurora artwork, a glass
 weather emblem, fine cyan/violet orbital highlights, a smooth reveal, and
 a staged title sequence over 3.6 seconds. Generate its native 320x240 PNG

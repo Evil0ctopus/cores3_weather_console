@@ -226,6 +226,10 @@ uint32_t gLastUiContentUpdateMs = 0;
 size_t gLastRadarCompletedFrames = 0;
 uint32_t gLastSettingsRevision = 0;
 std::atomic<bool> gSettingsApplyPending{false};
+uint32_t gAppliedSettingsRevision = 0;
+String gSystemActionStatus;
+uint8_t gLastDisplayBrightness = 255;
+uint32_t gRestartAtMs = 0;
 weather::WeatherApiConfig gAppliedWeatherConfig;
 uint32_t gLastLoopMs = 0;
 uint32_t gLastInputMs = 0;
@@ -379,22 +383,58 @@ void ApplySavedSettings(const app::AppSettings& settings) {
   apiCfg.apiKey = settings.apiKey;
   apiCfg.locationQuery = settings.locationQuery;
   apiCfg.locationKey = settings.locationKey;
+  apiCfg.locationName = settings.locationName;
   apiCfg.useMetric = true;
   apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
   if (apiCfg.apiKey != gAppliedWeatherConfig.apiKey ||
       apiCfg.locationQuery != gAppliedWeatherConfig.locationQuery ||
-      apiCfg.locationKey != gAppliedWeatherConfig.locationKey) {
+      apiCfg.locationKey != gAppliedWeatherConfig.locationKey ||
+      apiCfg.locationName != gAppliedWeatherConfig.locationName) {
     gAppliedWeatherConfig = apiCfg;
     gWeatherApi.begin(apiCfg);
     gWeatherApi.requestRefresh();
     gRadarEngine.reset();
   }
+  gWeatherApi.setUpdateInterval(settings.updateIntervalMinutes);
+  gDebugLog.setEnabled(settings.debugMode);
   if (gMainUiStarted && gUi.themeId() != settings.theme) {
     gUi.setTheme(settings.theme);
   } else if (!gMainUiStarted) {
     gBootTheme.setTheme(settings.theme);
   }
+
   gAudioEngine.playSystemSound(audio::SystemSound::SettingsSavedTone);
+}
+
+int WeatherLocalHour() {
+  const WeatherData& data = gWeatherApi.data();
+  if (data.currentLocalMinutes >= 0 && data.currentFetchedAtMs != 0) {
+    return ((data.currentLocalMinutes + (millis() - data.currentFetchedAtMs) / 60000UL) % 1440U) / 60U;
+  }
+  const time_t now = time(nullptr);
+  if (now > 1700000000 && data.timezoneId.length() > 0) {
+    const time_t local = now + data.timezoneOffsetMinutes * 60;
+    struct tm info;
+    gmtime_r(&local, &info);
+    return info.tm_hour;
+  }
+  return -1;
+}
+
+void UpdateRuntimeControls() {
+  const app::AppSettings& settings = gSettings.settings();
+  const bool quiet = app::quietHoursActive(settings.controls, WeatherLocalHour());
+  gAudioEngine.configure(settings.controls, quiet);
+  if (gLedEngineInitialized) gLedEngine.configure(settings.controls, quiet);
+  const bool dim = settings.controls.displayDimSeconds != 0 &&
+      lv_disp_get_inactive_time(nullptr) >= settings.controls.displayDimSeconds * 1000UL;
+  const uint32_t dimBrightness = min(settings.controls.displayNightBrightness, settings.controls.displayBrightness);
+  const uint32_t brightness = quiet || dim ? dimBrightness : settings.controls.displayBrightness;
+  const uint8_t value = static_cast<uint8_t>(brightness * 255U / 100U);
+  if (value != gLastDisplayBrightness) {
+    M5.Display.setBrightness(value);
+    gLastDisplayBrightness = value;
+  }
 }
 
 void InitializeLedEngineAfterBoot() {
@@ -403,9 +443,7 @@ void InitializeLedEngineAfterBoot() {
   }
   Serial.println("[LED] InitializeLedEngineAfterBoot: begin");
   gLedEngine.begin(160);
-  Serial.println("[LED] InitializeLedEngineAfterBoot: calling selfTestBottom3()");
-  gLedEngine.selfTestBottom3();
-  Serial.println("[LED] InitializeLedEngineAfterBoot: selfTestBottom3() returned");
+  gLedEngine.configure(gSettings.settings().controls, false);
   gLedEngineInitialized = true;
   Serial.println("[LED] LED engine initialized");
 }
@@ -434,6 +472,7 @@ void UpdateTouchFeedback() {
 }
 
 void UpdateAlertFeedback(const WeatherData& data) {
+  gAudioEngine.setAlertActive(data.alertCount > 0);
   if (data.alertCount == 0) {
     gLedEngine.clearAlert();
     gLastAlertSignature = "";
@@ -490,7 +529,29 @@ void ProcessRemoteCommands() {
       case app::DeviceRemoteCommandType::Touch:
         break;
       case app::DeviceRemoteCommandType::Sound:
-        gAudioEngine.playBootSound(audio::BootSound::Ready);
+        gAudioEngine.testSpeaker();
+        gSystemActionStatus = gAudioEngine.isMuted() ? "Speaker muted; unmute to test" : "Speaker test requested (quiet hours apply)";
+        break;
+      case app::DeviceRemoteCommandType::Refresh:
+        gWeatherApi.requestRefresh();
+        gRadarEngine.reset();
+        gSystemActionStatus = "Weather refresh requested";
+        break;
+      case app::DeviceRemoteCommandType::WifiScan:
+        gSystemActionStatus = gWifi.startScan() ? "Scanning WiFi..." : "WiFi scan could not start";
+        break;
+      case app::DeviceRemoteCommandType::WifiConnect: {
+        app::WifiConfig config = gWifi.config();
+        config.ssid = gSettings.settings().wifiSsid;
+        config.password = gSettings.settings().wifiPassword;
+        config.autoConnect = gSettings.settings().wifiAutoConnect;
+        gSystemActionStatus = gWifi.applyConfig(config, true, true) ? "Connection started" : "WiFi connection failed";
+        break;
+      }
+      case app::DeviceRemoteCommandType::Restart:
+        Serial.println("[SYSTEM] User requested restart");
+        gRestartAtMs = millis() + 750U;
+        gSystemActionStatus = "Restart scheduled";
         break;
     }
   }
@@ -506,6 +567,30 @@ void PrintLabelLayout(lv_obj_t* object) {
     Serial.printf("[LAYOUT] %d,%d %dx%d zoom=%d text=%s\n",
                   area.x1, area.y1, lv_area_get_width(&area), lv_area_get_height(&area),
                   lv_obj_get_style_transform_zoom(object, LV_PART_MAIN), lv_label_get_text(object));
+  } else if (lv_obj_check_type(object, &lv_img_class)) {
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    Serial.printf("[IMAGE] %d,%d %dx%d holder_index=%u\n", area.x1, area.y1,
+                  lv_area_get_width(&area), lv_area_get_height(&area),
+                  static_cast<unsigned>(lv_obj_get_index(lv_obj_get_parent(object))));
+  } else if (lv_obj_check_type(object, &lv_dropdown_class) ||
+             lv_obj_check_type(object, &lv_checkbox_class) || lv_obj_check_type(object, &lv_slider_class)) {
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    char text[101] = {};
+    int value = 0;
+    const char* kind = "slider";
+    if (lv_obj_check_type(object, &lv_dropdown_class)) {
+      kind = "dropdown";
+      value = lv_dropdown_get_selected(object);
+      lv_dropdown_get_selected_str(object, text, sizeof(text));
+    } else if (lv_obj_check_type(object, &lv_checkbox_class)) {
+      kind = "checkbox";
+      value = lv_obj_has_state(object, LV_STATE_CHECKED) ? 1 : 0;
+      snprintf(text, sizeof(text), "%s", lv_checkbox_get_text(object));
+    } else value = lv_slider_get_value(object);
+    Serial.printf("[WIDGET] %s %d,%d %dx%d value=%d text=%s\n", kind,
+        area.x1, area.y1, lv_area_get_width(&area), lv_area_get_height(&area), value, text);
   }
   for (uint32_t index = 0; index < lv_obj_get_child_cnt(object); ++index) {
     PrintLabelLayout(lv_obj_get_child(object, index));
@@ -599,6 +684,7 @@ void ProcessSerialCaptureCommand() {
       }
     } else if (strcmp(commandBuffer, "UI_LABELS") == 0) {
       PrintLabelLayout(lv_scr_act());
+      PrintLabelLayout(lv_layer_top());
       Serial.println("LAYOUT_END");
     } else if (strcmp(commandBuffer, "STATUS") == 0) {
       const app::WifiStatusInfo wifi = gWifi.statusInfo();
@@ -618,6 +704,19 @@ void ProcessSerialCaptureCommand() {
                     static_cast<unsigned>(gMaxNetworkMs), gRadarEngine.isDownloading() ? 1U : 0U,
                     static_cast<unsigned>(gRadarEngine.completedFrameCount()),
                     static_cast<unsigned>(gRadarEngine.lastError()));
+    } else if (strcmp(commandBuffer, "CONTROL_STATUS") == 0) {
+      JsonDocument status;
+      gLedEngine.writeStatus(status);
+      status["volume"] = gAudioEngine.getMasterVolume();
+      status["muted"] = gAudioEngine.isMuted();
+      status["displayBrightness"] = gLastDisplayBrightness;
+      status["localHour"] = WeatherLocalHour();
+      status["quiet"] = app::quietHoursActive(gSettings.settings().controls, WeatherLocalHour());
+      status["revision"] = gSettings.revision();
+      status["theme"] = ui::theme_id_to_storage_key(gUi.themeId());
+      Serial.print("CONTROL_STATUS ");
+      serializeJson(status, Serial);
+      Serial.println();
     } else if (strcmp(commandBuffer, "TOUCH_STATUS") == 0) {
       Serial.printf("TOUCH_STATUS pressed=%u x=%d y=%d presses=%u releases=%u gap_max=%u read_max=%u dispatch_max=%u overflows=%u\n",
                     gPhysicalTouch.pressed ? 1U : 0U, gPhysicalTouch.x, gPhysicalTouch.y,
@@ -772,7 +871,7 @@ void InitializeSubsystems() {
 
   gAudioEngine.begin();
   gAudioEngine.setEventCallback(OnAudioEvent, nullptr);
-  gAudioEngine.setMasterVolume(200);
+  gAudioEngine.configure(gSettings.settings().controls, false);
 
   app::WifiConfig wifiCfg;
   wifiCfg.ssid = gSettings.settings().wifiSsid;
@@ -813,10 +912,13 @@ void InitializeSubsystems() {
   apiCfg.apiKey = gSettings.settings().apiKey;
   apiCfg.locationQuery = gSettings.settings().locationQuery;
   apiCfg.locationKey = gSettings.settings().locationKey;
+  apiCfg.locationName = gSettings.settings().locationName;
   apiCfg.useMetric = true;
   apiCfg.radarCacheMs = 15UL * 60UL * 1000UL;
   gWeatherApi.begin(apiCfg);
   gAppliedWeatherConfig = apiCfg;
+  gAppliedSettingsRevision = gSettings.revision();
+  gWeatherApi.setUpdateInterval(gSettings.settings().updateIntervalMinutes);
 
   gRadarEngine.begin();
   gRadarEngine.setProgressCallback(OnRadarProgress, nullptr);
@@ -860,6 +962,7 @@ void setup() {
 
 void loop() {
   const uint32_t loopStarted = millis();
+  if (gRestartAtMs != 0 && static_cast<int32_t>(loopStarted - gRestartAtMs) >= 0) ESP.restart();
   M5.update();
   gLastInputMs = millis() - loopStarted;
   if (gLastInputMs > gMaxTouchReadMs) {
@@ -901,7 +1004,9 @@ void loop() {
   }
 
   const uint32_t networkStarted = millis();
-  if (gSettingsApplyPending.exchange(false)) {
+  const bool pendingSettings = gSettingsApplyPending.exchange(false);
+  if (pendingSettings || gAppliedSettingsRevision != gSettings.revision()) {
+    gAppliedSettingsRevision = gSettings.revision();
     ApplySavedSettings(gSettings.settings());
   }
   gWifi.update();
@@ -913,6 +1018,7 @@ void loop() {
     gLedEngine.progress(0, false);
   }
   gWebServer.tick();
+  UpdateRuntimeControls();
   gLastNetworkMs = millis() - networkStarted;
   if (gLastNetworkMs > gMaxNetworkMs) {
     gMaxNetworkMs = gLastNetworkMs;
@@ -948,6 +1054,18 @@ void loop() {
     systemInfo.spiffsUsage = FormatSpiffsUsage();
     systemInfo.firmwareVersion = APP_GIT_VERSION;
     systemInfo.ledMode = gLedEngine.statusLabel();
+    systemInfo.locationName = weatherData.locationName;
+    systemInfo.actionStatus = gSystemActionStatus;
+    systemInfo.quietActive = app::quietHoursActive(gSettings.settings().controls, WeatherLocalHour());
+    systemInfo.wifiScanning = gWifi.scanInProgress();
+    if (gUi.activePageIndex() == kSystemInfoPageIndex) {
+      app::WifiNetworkInfo networks[app::WifiManager::kMaxScanResults];
+      const size_t count = gWifi.scanNetworks(networks, app::WifiManager::kMaxScanResults);
+      for (size_t i = 0; i < count; ++i) {
+        if (i != 0) systemInfo.wifiNetworks += "\n";
+        systemInfo.wifiNetworks += networks[i].ssid;
+      }
+    }
 
     gUi.update(weatherData, gRadarEngine, systemInfo);
     gLedEngine.updateWeatherMood(weatherData);
