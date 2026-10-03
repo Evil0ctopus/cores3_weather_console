@@ -142,6 +142,22 @@ taps received within one loop. Physical input uses the touch detail's pressed
 state, not its presence (release details remain available for click feedback).
 The LVGL input reader runs immediately after each M5 touch update, before
 network work and rendering, so its polling timer cannot skip a sampled press.
+Physical controller samples are also collected after each display flush and
+buffered until LVGL can safely consume them; LVGL is never re-entered during
+rendering. Consecutive movement samples are coalesced, but press/release edges
+and tap/hold/swipe feedback are retained in order. This lets quick finger taps
+survive a full-page redraw without moving shared I2C hardware to another task.
+USB `TOUCH_RESET` resets diagnostic counters; `TOUCH_STATUS` reports physical
+press/release counts, latest position/state, maximum sampling gap (`gap_max`),
+controller read time (`read_max`), LVGL input dispatch time (`dispatch_max`)
+and buffer overflows. These are actual physical-input counters, not remote
+`TOUCH` commands. Reset after boot, reproduce the finger-tap problem, then read
+the counters to distinguish controller delays from UI processing.
+The touch buffer has a standalone C++11 regression in
+`test/touch_buffer/test_touch_buffer.cpp`. Compile it with a host C++ compiler
+(for example, `g++ -std=c++11 -Wall -Wextra -Werror test/touch_buffer/test_touch_buffer.cpp -o touch_buffer_test.exe`)
+and run the resulting executable. It checks quick-tap edge ordering, movement
+coalescing, hold feedback, overflow handling and ring-buffer wraparound.
 `RESTART` acknowledges and reboots the device to replay the boot intro.
 USB provisioning accepts `WIFI {"ssid":"your-network","password":"your-password"}`.
 Credentials are saved on the device, never echoed in the command response.
@@ -173,10 +189,24 @@ The web mirror uses native top-down RGB565 BMPs (153,666 bytes rather than
 230,454), preserving screen color precision without expensive RGB conversion.
 USB `SCREEN_BMP` retains its original 24-bit BMP format. Snapshot conversion
 runs outside the display lock; the lock only protects a framebuffer copy.
-Navigation also uses a 60-row internal-RAM draw buffer and avoids updating
+Navigation also uses a 20-row internal-RAM draw buffer and avoids updating
 unchanged labels/HUD properties. Radar repainting follows a display revision:
 new downloads, frames, interpolation steps, modes and overlays still redraw,
 but an unchanged radar map no longer invalidates the page every content tick.
+Radar HTTP/TLS connections, body downloads, PNG decoding, basemap compositing
+and storm-cell detection run on a dedicated worker, not the touch/render loop.
+The worker owns its buffers and a snapshot of the request configuration;
+responses from an earlier location or reset are discarded before publication.
+LVGL objects, progress callbacks and frame publication stay on the UI task.
+Resetting radar clears cached image sources before the next display render.
+USB `RADAR_REFRESH` retries the current radar imagery without changing saved
+settings. It requires connected Wi-Fi and downloaded radar metadata.
+`STATUS` also reports `radar_busy`, `radar_frames`, `radar_error` and
+`network_max` (the peak UI-loop network phase, reset by `RADAR_REFRESH`).
+Run `python scripts/verify_navigation_performance.py COM3 --cycles 10 --max-ms 350 --radar-refresh --max-network-ms 50 --mirror-url http://DEVICE_IP/api/device/screen`
+to verify painted navigation under mirror load while radar refreshes, including
+an in-flight reset. The check requires successful radar completion and a
+UI-loop network-phase peak below 50 ms, not just command acknowledgements.
 
 ### First boot
 

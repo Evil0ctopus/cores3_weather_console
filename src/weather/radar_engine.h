@@ -4,6 +4,10 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <lvgl.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -160,9 +164,7 @@ class RadarEngine {
 	enum class DownloadState : uint8_t {
 		Idle = 0,
 		Connect,
-		SendRequest,
-		ReadHeaders,
-		ReadBody,
+		Waiting,
 		FinalizeFrame,
 		Complete,
 		Error,
@@ -175,38 +177,60 @@ class RadarEngine {
 		String path;
 	};
 
+	struct HttpJob {
+		~HttpJob();
+		uint32_t generation = 0;
+		String url;
+		RadarDownloadConfig config;
+		uint8_t* data = nullptr;
+		size_t length = 0;
+		String contentType;
+		RadarFrameFormat format = RadarFrameFormat::Unknown;
+		uint16_t width = 0;
+		uint16_t height = 0;
+		RadarStormCell autoStormCells[kMaxStormCells]{};
+		size_t autoStormCellCount = 0;
+		uint8_t* mapData = nullptr;
+		size_t mapLength = 0;
+		RadarEngineError error = RadarEngineError::None;
+		String message;
+		int httpStatus = 0;
+	};
+
 	void resetAll();
 	void clearFrame(FrameSlot& slot);
 	void clearFrames();
 	void transitionToError(RadarEngineError code, const String& message, int httpStatus = 0);
 	void emitProgress(const char* stage);
 
-	bool parseUrl(const String& url, UrlParts& out) const;
-	bool beginFrameDownload(size_t index);
-	bool readHeaderLine(String& line);
+	static bool parseUrl(const String& url, UrlParts& out);
+	bool initializeHttpWorker();
+	static void httpWorkerTask(void* context);
+	void runHttpWorker();
+	static void prepareDownloadedFrame(HttpJob& job);
 	void pumpDownload();
 	void finalizeFrame();
 	void advanceAnimation();
 	bool ensureFrameResident(FrameSlot& slot);
 	bool ensureDisplayBuffer(size_t length);
 	bool buildDisplayFrame(FrameSlot& current, FrameSlot* next, uint8_t blendStep, uint8_t blendSteps);
-	bool fetchUrlToBuffer(const String& url, uint8_t*& outData, size_t& outLength, String& outContentType);
-	bool decodePngFrameToRgb565(const uint8_t* sourceData,
+	static bool fetchUrlToBuffer(const String& url, const RadarDownloadConfig& config,
+		uint8_t*& outData, size_t& outLength, String& outContentType,
+		RadarEngineError& error, String& message, int& httpStatus);
+	static bool decodePngFrameToRgb565(const uint8_t* sourceData,
 									 size_t sourceLength,
 									 uint32_t backgroundColorRgb888,
 									 uint8_t*& decodedData,
 									 size_t& decodedLength,
 									 uint16_t& width,
 									 uint16_t& height,
-									 bool reportErrors = true);
+									 RadarEngineError& error, String& message);
 	bool applyStaticPostProcess(uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height);
 	void applyStormCellOverlay(uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height, const RadarStormCell* cells, size_t count);
-	void detectStormCells(const uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height, RadarStormCell* outCells, size_t& outCount) const;
+	static void detectStormCells(const uint8_t* data, size_t length, RadarFrameFormat format, uint16_t width, uint16_t height, RadarStormCell* outCells, size_t& outCount);
 	void invalidateDescriptors();
 
 	bool ensureSpiffs();
-	bool reserveRamForActiveFrame(size_t bytesHint);
-	bool appendActiveData(const uint8_t* data, size_t len);
 	bool commitActiveDataToStorage();
 	bool prepareLvglDescriptor(FrameSlot& slot);
 
@@ -229,18 +253,12 @@ class RadarEngine {
 	bool spiffsReady_ = false;
 	bool downloadStarted_ = false;
 
-	String headerBuffer_;
-	String requestBuffer_;
-	String activeContentType_;
-
-	int activeContentLength_ = -1;
-	int activeHttpCode_ = 0;
-	size_t activeReceived_ = 0;
-	bool activeHeaderDone_ = false;
+	RadarFrameFormat activeFormat_ = RadarFrameFormat::Unknown;
+	uint16_t activeWidth_ = 0;
+	uint16_t activeHeight_ = 0;
 
 	uint8_t* activeTempBuffer_ = nullptr;
 	size_t activeTempLength_ = 0;
-	size_t activeTempCapacity_ = 0;
 
 	uint32_t lastAnimationStepMs_ = 0;
 	uint32_t lastDownloadPumpMs_ = 0;
@@ -254,12 +272,12 @@ class RadarEngine {
 	uint8_t interpolationStep_ = 0;
 	uint32_t displayRevision_ = 0;
 
-	UrlParts activeUrl_;
-	WiFiClient activeClient_;
-	WiFiClientSecure activeSecureClient_;
-	Client* activeTransportClient_ = nullptr;
-	uint32_t stateEnteredMs_ = 0;
-	uint32_t lastReceiveMs_ = 0;
+	QueueHandle_t requestQueue_ = nullptr;
+	QueueHandle_t responseQueue_ = nullptr;
+	SemaphoreHandle_t workerStopped_ = nullptr;
+	TaskHandle_t workerTask_ = nullptr;
+	bool requestInFlight_ = false;
+	uint32_t downloadGeneration_ = 0;
 };
 
 }  // namespace weather

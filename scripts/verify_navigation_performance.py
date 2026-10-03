@@ -56,9 +56,13 @@ def main() -> None:
     parser.add_argument("--cycles", type=int, default=5)
     parser.add_argument("--max-ms", type=float, default=350)
     parser.add_argument("--mirror-url", help="Exercise live screen capture concurrently, e.g. http://192.168.1.2/api/device/screen")
+    parser.add_argument("--radar-refresh", action="store_true",
+                        help="Refresh radar during every cycle, including an in-flight reset.")
+    parser.add_argument("--max-network-ms", type=int, default=50,
+                        help="Maximum UI-loop network phase during a radar refresh (default: 50).")
     args = parser.parse_args()
-    if args.cycles < 1 or args.max_ms <= 0:
-        parser.error("cycles and max-ms must be positive")
+    if args.cycles < 1 or args.max_ms <= 0 or args.max_network_ms <= 0:
+        parser.error("cycles, max-ms and max-network-ms must be positive")
     device = serial.Serial()
     device.port = args.port
     device.baudrate = 115200
@@ -68,11 +72,23 @@ def main() -> None:
     times: list[float] = []
     with device, mirror_load(args.mirror_url):
         deadline = time.monotonic() + 45
-        while not status(device)["ready"]:
+        while True:
+            sample = status(device)
+            if sample["ready"] and (not args.radar_refresh or sample.get("radar_frames", 0) > 0):
+                break
             if time.monotonic() >= deadline:
-                raise TimeoutError("UI did not finish boot")
+                raise TimeoutError("UI boot or initial radar download did not finish")
             time.sleep(0.5)
         for cycle in range(args.cycles):
+            saw_radar_busy = False
+            if args.radar_refresh:
+                command(device, "RADAR_REFRESH")
+                sample = status(device)
+                saw_radar_busy = bool(sample["radar_busy"])
+                if not saw_radar_busy:
+                    raise RuntimeError("Radar download was not active after refresh")
+                # Reset with a worker job in flight to catch stale-response publication.
+                command(device, "RADAR_REFRESH")
             for page in (0, 6, 1, 6, 2, 6, 3, 6, 4, 6, 5, 6, 0, 1, 2, 3, 4, 5, 6):
                 previous = status(device)["paint"]
                 start = time.monotonic()
@@ -80,6 +96,10 @@ def main() -> None:
                 deadline = start + 8
                 while True:
                     sample = status(device)
+                    if args.radar_refresh:
+                        saw_radar_busy |= bool(sample["radar_busy"])
+                        if sample["network_max"] >= args.max_network_ms:
+                            raise RuntimeError(f"UI-loop network phase reached {sample['network_max']}ms")
                     if sample["page"] == page and sample["painted_page"] == page and sample["paint"] != previous:
                         break
                     if time.monotonic() >= deadline:
@@ -92,6 +112,21 @@ def main() -> None:
                       f"network={sample['network']}ms content={sample['content']}ms "
                       f"audio={sample['audio_ms']}ms render={sample['render']}ms")
                 time.sleep(0.15)
+            if args.radar_refresh:
+                deadline = time.monotonic() + 30
+                while True:
+                    sample = status(device)
+                    if not sample["radar_busy"]:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Radar refresh never completed")
+                    time.sleep(0.05)
+                if sample["radar_error"] or sample["radar_frames"] < 1:
+                    raise RuntimeError(f"Radar refresh failed: {sample}")
+                if not saw_radar_busy or sample["network_max"] >= args.max_network_ms:
+                    raise RuntimeError(f"Radar responsiveness check failed: {sample}")
+                print(f"PASS: cycle {cycle + 1} radar refresh completed after in-flight reset; "
+                      f"network peak={sample['network_max']}ms")
         print(f"Completed {len(times)} transitions: median={statistics.median(times):.1f}ms max={max(times):.1f}ms")
         if max(times) >= args.max_ms:
             raise RuntimeError(f"Completed transition exceeded {args.max_ms:.0f}ms")

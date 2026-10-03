@@ -591,11 +591,12 @@ void RootNavigator::update(const WeatherData& data, weather::RadarEngine& radar,
 		lv_obj_align_to(batteryHead_, batteryShell_, LV_ALIGN_OUT_RIGHT_MID, 2, 0);
 	}
 
+	// Clear/rebind radar sources even off-screen before a freed frame can be drawn.
+	radarPage_.update(data, radar);
 	if (!weatherPagesPrimed_ && data.current.valid) {
 		currentPage_.update(data, systemInfo, imperial);
 		hourlyPage_.update(data, imperial);
 		dailyPage_.update(data, imperial);
-		radarPage_.update(data, radar);
 		alertsPage_.update(data);
 		systemPage_.update(systemInfo);
 		weatherPagesPrimed_ = true;
@@ -604,7 +605,7 @@ void RootNavigator::update(const WeatherData& data, weather::RadarEngine& radar,
 			case 0: currentPage_.update(data, systemInfo, imperial); break;
 			case 1: hourlyPage_.update(data, imperial); break;
 			case 2: dailyPage_.update(data, imperial); break;
-			case 3: radarPage_.update(data, radar); break;
+			case 3: break;
 			case 4: alertsPage_.update(data); break;
 			case 5: systemPage_.update(systemInfo); break;
 		}

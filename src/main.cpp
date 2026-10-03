@@ -14,6 +14,7 @@
 #include "system/device_remote.h"
 #include "system/settings.h"
 #include "system/time_manager.h"
+#include "system/touch_buffer.h"
 #include "system/wifi_manager.h"
 #include "ui/ui_assets.h"
 #include "ui/ui_boot_anim.h"
@@ -42,9 +43,68 @@ uint32_t gLastFlushCalls = 0;
 uint32_t gLastAudioMs = 0;
 uint32_t gPaintGeneration = 0;
 uint8_t gPaintedPage = 0xFF;
+app::TouchBuffer gPhysicalTouchBuffer;
+app::TouchBuffer gTouchFeedbackBuffer;
+app::TouchSample gPhysicalTouch;
+uint32_t gLastTouchSampleMs = 0;
+uint32_t gMaxTouchGapMs = 0;
+uint32_t gMaxTouchReadMs = 0;
+uint32_t gPhysicalPressCount = 0;
+uint32_t gPhysicalReleaseCount = 0;
+uint32_t gTouchOverflowCount = 0;
+uint32_t gMaxInputDispatchMs = 0;
 
-// Sixty internal-RAM rows limit traversal/flush overhead without a full framebuffer.
-static lv_color_t sLvglBuf[320 * 60];
+void SamplePhysicalTouch(bool updateController) {
+  const uint32_t now = millis();
+  if (updateController && now - gLastTouchSampleMs <= m5::Touch_Class::TOUCH_MIN_UPDATE_MSEC) {
+    return;
+  }
+  if (gLastTouchSampleMs != 0 && now - gLastTouchSampleMs > gMaxTouchGapMs) {
+    gMaxTouchGapMs = now - gLastTouchSampleMs;
+  }
+  gLastTouchSampleMs = now;
+  const uint32_t readStarted = millis();
+  if (updateController && M5.Touch.isEnabled()) {
+    M5.Touch.update(now);
+  }
+  const uint32_t readMs = millis() - readStarted;
+  if (readMs > gMaxTouchReadMs) {
+    gMaxTouchReadMs = readMs;
+  }
+  app::TouchSample sample = gPhysicalTouch;
+  sample.pressed = false;
+  sample.feedback = app::TouchFeedback::None;
+  if (M5.Touch.getCount() > 0) {
+    const auto& detail = M5.Touch.getDetail(0);
+    sample.pressed = detail.isPressed();
+    sample.x = detail.x;
+    sample.y = detail.y;
+    sample.dx = detail.distanceX();
+    sample.dy = detail.distanceY();
+    if (detail.wasClicked()) sample.feedback = app::TouchFeedback::Tap;
+    else if (detail.wasHold()) sample.feedback = app::TouchFeedback::Hold;
+    else if (detail.wasFlicked() && abs(sample.dx) < abs(sample.dy)) {
+      sample.feedback = sample.dy >= 0 ? app::TouchFeedback::SwipeDown : app::TouchFeedback::SwipeUp;
+    }
+  }
+  if (sample.pressed != gPhysicalTouch.pressed) {
+    if (sample.pressed) ++gPhysicalPressCount;
+    else ++gPhysicalReleaseCount;
+  }
+  if (!gPhysicalTouchBuffer.push(sample)) {
+    ++gTouchOverflowCount;
+    gPhysicalTouchBuffer.clear();
+    sample.pressed = false;
+    sample.feedback = app::TouchFeedback::None;
+    gPhysicalTouchBuffer.push(sample);
+    Serial.println("[TOUCH] ERROR: sample buffer overflow; cancelling press");
+  }
+  gPhysicalTouch = sample;
+}
+
+// Short flush slices also provide physical touch polling opportunities during redraws.
+constexpr uint32_t kLvglBufferRows = 20;
+static lv_color_t sLvglBuf[320 * kLvglBufferRows];
 
 static void LvglDisplayFlush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
   static bool firstFlushLogged = false;
@@ -63,6 +123,8 @@ static void LvglDisplayFlush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color
   M5.Display.startWrite();
   M5.Display.pushImage(area->x1, area->y1, w, h, reinterpret_cast<uint16_t*>(color_p));
   M5.Display.endWrite();
+  // Acquire only: never call LVGL recursively from its display flush.
+  SamplePhysicalTouch(true);
   lv_disp_flush_ready(drv);
 }
 
@@ -88,19 +150,17 @@ static void LvglTouchRead(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
     data->point.y = gRemoteTouchY;
     return;
   }
-  if (M5.Touch.getCount() > 0) {
-    const auto& t = M5.Touch.getDetail(0);
-    if (t.wasPressed() || t.wasReleased()) {
-      Serial.printf("[TOUCH] physical state=%u pressed=%u x=%d y=%d count=%u\n",
-                    static_cast<unsigned>(t.state), t.isPressed() ? 1U : 0U,
-                    t.x, t.y, static_cast<unsigned>(M5.Touch.getCount()));
+  app::TouchSample sample = gPhysicalTouch;
+  if (gPhysicalTouchBuffer.pop(sample)) {
+    data->continue_reading = !gPhysicalTouchBuffer.empty();
+    if (sample.feedback != app::TouchFeedback::None && !gTouchFeedbackBuffer.push(sample)) {
+      ++gTouchOverflowCount;
+      Serial.println("[TOUCH] ERROR: feedback buffer overflow");
     }
-    data->state = t.isPressed() ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-    data->point.x = t.x;
-    data->point.y = t.y;
-  } else {
-    data->state = LV_INDEV_STATE_RELEASED;
   }
+  data->state = sample.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+  data->point.x = sample.x;
+  data->point.y = sample.y;
 }
 
 void InitializeLvgl() {
@@ -110,7 +170,7 @@ void InitializeLvgl() {
   ui::ui_asset_init();
 
   static lv_disp_draw_buf_t drawBuf;
-  lv_disp_draw_buf_init(&drawBuf, sLvglBuf, nullptr, 320 * 60);
+  lv_disp_draw_buf_init(&drawBuf, sLvglBuf, nullptr, 320 * kLvglBufferRows);
   Serial.println("[UI] LVGL draw buffer initialized");
 
   static lv_disp_drv_t dispDrv;
@@ -170,6 +230,8 @@ weather::WeatherApiConfig gAppliedWeatherConfig;
 uint32_t gLastLoopMs = 0;
 uint32_t gLastInputMs = 0;
 uint32_t gLastNetworkMs = 0;
+uint32_t gMaxNetworkMs = 0;
+uint32_t gLastUiRadarRevision = 0;
 uint32_t gLastContentMs = 0;
 uint32_t gLastRenderMs = 0;
 
@@ -349,30 +411,24 @@ void InitializeLedEngineAfterBoot() {
 }
 
 void UpdateTouchFeedback() {
-  if (M5.Touch.getCount() == 0) {
-    return;
-  }
-
-  const m5::Touch_Class::touch_detail_t& detail = M5.Touch.getDetail(0);
-  const int lastDx = detail.distanceX();
-  const int lastDy = detail.distanceY();
-
-  if (detail.wasClicked()) {
-    gLedEngine.touchEvent(led::LedEngine::TouchKind::Tap, lastDx, lastDy);
-    gAudioEngine.playTouchSound(audio::TouchSound::TapClick);
-    return;
-  }
-
-  if (detail.wasHold()) {
-    gLedEngine.touchEvent(led::LedEngine::TouchKind::LongPress, lastDx, lastDy);
-    gAudioEngine.playTouchSound(audio::TouchSound::LongPressRise);
-    return;
-  }
-
-  if (detail.wasFlicked()) {
-    if (abs(lastDx) < abs(lastDy)) {
-      gLedEngine.touchEvent(lastDy >= 0 ? led::LedEngine::TouchKind::SwipeDown : led::LedEngine::TouchKind::SwipeUp, lastDx, lastDy);
-      gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
+  app::TouchSample sample;
+  while (gTouchFeedbackBuffer.pop(sample)) {
+    switch (sample.feedback) {
+      case app::TouchFeedback::Tap:
+        gLedEngine.touchEvent(led::LedEngine::TouchKind::Tap, sample.dx, sample.dy);
+        gAudioEngine.playTouchSound(audio::TouchSound::TapClick);
+        break;
+      case app::TouchFeedback::Hold:
+        gLedEngine.touchEvent(led::LedEngine::TouchKind::LongPress, sample.dx, sample.dy);
+        gAudioEngine.playTouchSound(audio::TouchSound::LongPressRise);
+        break;
+      case app::TouchFeedback::SwipeUp:
+      case app::TouchFeedback::SwipeDown:
+        gLedEngine.touchEvent(sample.feedback == app::TouchFeedback::SwipeDown ?
+            led::LedEngine::TouchKind::SwipeDown : led::LedEngine::TouchKind::SwipeUp, sample.dx, sample.dy);
+        gAudioEngine.playTouchSound(audio::TouchSound::SwipeWhoosh);
+        break;
+      case app::TouchFeedback::None: break;
     }
   }
 }
@@ -546,7 +602,7 @@ void ProcessSerialCaptureCommand() {
       Serial.println("LAYOUT_END");
     } else if (strcmp(commandBuffer, "STATUS") == 0) {
       const app::WifiStatusInfo wifi = gWifi.statusInfo();
-      Serial.printf("DEVICE_STATUS ready=%u page=%u ip=%s ap=%s heap=%u psram=%u loop=%u input=%u network=%u content=%u render=%u theme=%u audio=%u speaker=%u pixels=%u flushes=%u audio_ms=%u painted_page=%u paint=%u\n",
+      Serial.printf("DEVICE_STATUS ready=%u page=%u ip=%s ap=%s heap=%u psram=%u loop=%u input=%u network=%u content=%u render=%u theme=%u audio=%u speaker=%u pixels=%u flushes=%u audio_ms=%u painted_page=%u paint=%u network_max=%u radar_busy=%u radar_frames=%u radar_error=%u\n",
                     gMainUiStarted ? 1U : 0U, static_cast<unsigned>(gUi.activePageIndex()),
                     wifi.ipAddress.c_str(), wifi.accessPointIpAddress.c_str(),
                     static_cast<unsigned>(ESP.getFreeHeap()),
@@ -558,7 +614,32 @@ void ProcessSerialCaptureCommand() {
                     M5.Speaker.isPlaying() ? 1U : 0U,
                     static_cast<unsigned>(gLastFlushPixels), static_cast<unsigned>(gLastFlushCalls),
                     static_cast<unsigned>(gLastAudioMs), static_cast<unsigned>(gPaintedPage),
-                    static_cast<unsigned>(gPaintGeneration));
+                    static_cast<unsigned>(gPaintGeneration),
+                    static_cast<unsigned>(gMaxNetworkMs), gRadarEngine.isDownloading() ? 1U : 0U,
+                    static_cast<unsigned>(gRadarEngine.completedFrameCount()),
+                    static_cast<unsigned>(gRadarEngine.lastError()));
+    } else if (strcmp(commandBuffer, "TOUCH_STATUS") == 0) {
+      Serial.printf("TOUCH_STATUS pressed=%u x=%d y=%d presses=%u releases=%u gap_max=%u read_max=%u dispatch_max=%u overflows=%u\n",
+                    gPhysicalTouch.pressed ? 1U : 0U, gPhysicalTouch.x, gPhysicalTouch.y,
+                    static_cast<unsigned>(gPhysicalPressCount), static_cast<unsigned>(gPhysicalReleaseCount),
+                    static_cast<unsigned>(gMaxTouchGapMs), static_cast<unsigned>(gMaxTouchReadMs),
+                    static_cast<unsigned>(gMaxInputDispatchMs), static_cast<unsigned>(gTouchOverflowCount));
+    } else if (strcmp(commandBuffer, "TOUCH_RESET") == 0) {
+      gPhysicalPressCount = 0;
+      gPhysicalReleaseCount = 0;
+      gMaxTouchGapMs = 0;
+      gMaxTouchReadMs = 0;
+      gMaxInputDispatchMs = 0;
+      gTouchOverflowCount = 0;
+      Serial.println("CONTROL_OK touch diagnostics reset");
+    } else if (strcmp(commandBuffer, "RADAR_REFRESH") == 0) {
+      if (!gMainUiStarted || !gWifi.connected() || gWeatherApi.data().radarFrameCount == 0) {
+        Serial.println("CONTROL_ERROR radar refresh requires WiFi and radar metadata");
+      } else {
+        gRadarEngine.reset();
+        gMaxNetworkMs = 0;
+        Serial.println("CONTROL_OK radar refresh started");
+      }
     } else if (strcmp(commandBuffer, "SOUND") == 0 || strncmp(commandBuffer, "PAGE ", 5) == 0 ||
                strncmp(commandBuffer, "TOUCH ", 6) == 0) {
       app::DeviceRemoteCommand command;
@@ -781,10 +862,19 @@ void loop() {
   const uint32_t loopStarted = millis();
   M5.update();
   gLastInputMs = millis() - loopStarted;
+  if (gLastInputMs > gMaxTouchReadMs) {
+    gMaxTouchReadMs = gLastInputMs;
+  }
+  SamplePhysicalTouch(false);
   ProcessRemoteCommands();
   ProcessSerialCaptureCommand();
   if (gTouchReadTimer != nullptr) {
+    const uint32_t dispatchStarted = millis();
     lv_indev_read_timer_cb(gTouchReadTimer);
+    const uint32_t dispatchMs = millis() - dispatchStarted;
+    if (dispatchMs > gMaxInputDispatchMs) {
+      gMaxInputDispatchMs = dispatchMs;
+    }
   }
 
   if (!gMainUiStarted) {
@@ -824,6 +914,9 @@ void loop() {
   }
   gWebServer.tick();
   gLastNetworkMs = millis() - networkStarted;
+  if (gLastNetworkMs > gMaxNetworkMs) {
+    gMaxNetworkMs = gLastNetworkMs;
+  }
 
   const uint32_t contentStarted = millis();
   UpdateTouchFeedback();
@@ -832,8 +925,10 @@ void loop() {
   const WeatherData& weatherData = gWeatherApi.data();
   const uint32_t uiNowMs = millis();
   if ((uiNowMs - gLastUiContentUpdateMs) >= kUiContentUpdateIntervalMs ||
-      gUi.activePageIndex() != gLastPageIndex) {
+      gUi.activePageIndex() != gLastPageIndex ||
+      gRadarEngine.displayRevision() != gLastUiRadarRevision) {
     gLastUiContentUpdateMs = uiNowMs;
+    gLastUiRadarRevision = gRadarEngine.displayRevision();
     ui::SystemInfo systemInfo;
     const app::WifiStatusInfo wifiInfo = gWifi.statusInfo();
     const String primaryIp = wifiInfo.ipAddress.length() > 0 ? wifiInfo.ipAddress : wifiInfo.accessPointIpAddress;
