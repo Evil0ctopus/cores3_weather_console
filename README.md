@@ -61,6 +61,8 @@ synchronized to the other.
   inactivity-dimmed screen.
 * **WiFi:** Async network scan, network/password keyboard entry, auto reconnect,
   and Save and connect. Network credentials remain stored only in device NVS.
+  On-device text editors keep the full keyboard above a separate Cancel/Save
+  row, so all keys and both actions fit on the 320x240 display without scrolling.
 * **Quiet Hours:** Weather-location local start/end hours. Overnight and
   same-day windows are supported; equal start/end means all day. Unknown local
   time leaves quiet hours inactive. Optional sounds are silenced, LEDs are
